@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# 本机配置与私有数据, 不进仓库
+todo_config.json
+todo_data.json
+todo_data.json.tmp
+todo_selftest_data.json
+todo_error.log
+
+# 录制调试输出
+demo_log.txt
+f*.png
+frame_*.png
+preview*.png
+*.tmp
