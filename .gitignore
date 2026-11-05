@@ -1,7 +1,11 @@
+# 打包
+build/
+dist/
+*.spec
+
 # Python
 __pycache__/
 *.py[cod]
-*.egg-info/
 
 # 本机配置与私有数据, 不进仓库
 todo_config.json

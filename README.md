@@ -10,13 +10,12 @@
 
 ## 安装
 
+**方式一（推荐）**：直接双击 `待办清单.exe`，不需要装任何东西。
+
+**方式二**：用源码跑，需要 Python 3.8+：
+
 ```bash
 py -3 -m pip install pystray pillow
-```
-
-然后双击 `启动待办.bat`，或命令行：
-
-```bash
 pyw -3 todo.py
 ```
 
@@ -115,13 +114,17 @@ https://网址自动变链接
 
 | 文件 | 说明 |
 |---|---|
-| `todo.py` | 程序本体 |
+| `待办清单.exe` | 打包好的程序，双击即用，不需要 Python |
+| `todo.py` | 源码入口 |
+| `todowidget/` | 源码包（界面、数据、配色等分模块） |
 | `todo_data.json` | 你的任务数据（自动生成，建议备份） |
 | `todo_config.json` | 界面配置（主题、位置、置顶，自动生成） |
-| `启动待办.bat` | 双击启动 |
+| `启动待办.bat` | 有 exe 就启动 exe，否则用源码启动 |
 | `开机自启-开启.bat` / `开机自启-关闭.bat` | 开机自启开关 |
 
 备份或换电脑：把整个文件夹复制走即可，数据都在里面。
+
+> 改完源码想重新打包：`py -3 -m PyInstaller --noconfirm --onefile --windowed --icon icon.ico --name "待办清单" todo.py`
 
 ---
 

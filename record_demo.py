@@ -16,8 +16,13 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import todo
+import tkinter as tk
+
 from PIL import ImageGrab
+
+from todowidget.app import TodoApp
+from todowidget.store import Store, new_item
+from todowidget.utils import FakeEvent, TkApp, place_window
 
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 CONF_FILE = os.path.join(APP_DIR, "todo_config.json")
@@ -33,9 +38,9 @@ DELAY = 0.09
 
 
 def item(text, children=None):
-    node = todo.new_item(text)
+    node = new_item(text)
     if children:
-        node["children"] = [todo.new_item(c) for c in children]
+        node["children"] = [new_item(c) for c in children]
     return node
 
 
@@ -64,8 +69,8 @@ def demo_lists():
 
 
 def main():
-    todo.TodoApp.start_tray = lambda self: None
-    todo.TodoApp.sink = lambda self: None
+    TodoApp.start_tray = lambda self: None
+    TodoApp.sink = lambda self: None
 
     tmp_data = os.path.join(tempfile.gettempdir(), "todo_demo_data.json")
     with open(tmp_data, "w", encoding="utf-8") as f:
@@ -77,13 +82,13 @@ def main():
         with open(CONF_FILE, encoding="utf-8") as f:
             conf_backup = f.read()
 
-    root = todo.TkApp()
-    app = todo.TodoApp(root, store=todo.Store(tmp_data))
+    root = TkApp()
+    app = TodoApp(root, store=Store(tmp_data))
     root.attributes("-topmost", True)
     root.geometry("{}x{}+{}+{}".format(WIN_W, WIN_H, WIN_X, WIN_Y))
 
     # 铺一块干净的底, 免得把桌面壁纸录进去
-    backdrop = todo.tk.Toplevel(root)
+    backdrop = tk.Toplevel(root)
     backdrop.overrideredirect(True)
     backdrop.configure(bg="#eef0f4")
     backdrop.geometry("{}x{}+{}+{}".format(BOX[2] - BOX[0], BOX[3] - BOX[1],
@@ -91,7 +96,7 @@ def main():
     backdrop.lower()
 
     # 位置可能被 Tk 挪动, 直接用系统接口摆到位
-    todo.place_window(root, WIN_X, WIN_Y, WIN_W, WIN_H)
+    place_window(root, WIN_X, WIN_Y, WIN_W, WIN_H)
     for _ in range(14):
         root.update()
         time.sleep(0.03)
@@ -127,7 +132,7 @@ def main():
         box = app.tree.bbox(iid)
         if not box:
             return
-        app.on_hover(todo.FakeEvent(app.tree, x, box[1] + box[3] // 2))
+        app.on_hover(FakeEvent(app.tree, x, box[1] + box[3] // 2))
 
     print("[step] 开始")
     hold(0.9)
@@ -186,14 +191,14 @@ def main():
         dst_box = app.tree.bbox(target)
         start_y = src_box[1] + src_box[3] // 2
         end_y = dst_box[1] + dst_box[3] // 2
-        app.on_press(todo.FakeEvent(app.tree, 140, start_y))
-        app.on_drag(todo.FakeEvent(app.tree, 140, start_y + 10))
+        app.on_press(FakeEvent(app.tree, 140, start_y))
+        app.on_drag(FakeEvent(app.tree, 140, start_y + 10))
         steps = 12
         for i in range(1, steps + 1):
             y = start_y + int((end_y - start_y) * i / steps)
-            app.on_drag(todo.FakeEvent(app.tree, 140, y))
+            app.on_drag(FakeEvent(app.tree, 140, y))
             shot(0.04)
-        app.on_release(todo.FakeEvent(app.tree, 140, end_y))
+        app.on_release(FakeEvent(app.tree, 140, end_y))
         hold(0.7)
 
     print("[step] 6 切换清单")
