@@ -53,6 +53,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.collapsed = False
         self._expanded_size = None
         self.tab = self.conf.get("tab", "pending")
+        self.sort_mode = self.conf.get("sort_mode", "manual")
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
         self.settings_win = None
@@ -88,6 +89,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def save_conf(self):
         self.conf.update(mode=self.mode, topmost=self.topmost, alpha=self.alpha,
                          collapsed=bool(self.collapsed), tab=self.tab,
+                         sort_mode=self.sort_mode,
                          theme=self.theme, accent=self.accent)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -275,6 +277,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             drop = dict(cfg, background="#4a3f22")
             self.tree.tag_configure("drop_" + name, **drop)
         self.tree.tag_configure("empty", font=self.f_item, foreground=P.fg_faint)
+        self.tree.tag_configure("sep", font=self.f_small, foreground=P.fg_dim)
 
         self.tree.bind("<space>", lambda e: self.toggle(self.tree.focus()))
         self.tree.bind("<Double-1>", self.on_double_click)
@@ -322,7 +325,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         flat_btn(foot, "展开", lambda: self.collapse_all(False))
         flat_btn(foot, "折叠", lambda: self.collapse_all(True))
 
-        self.tip = tk.Label(foot, text="双击便签 · 拖动排序", bg=P.bg,
+        tip_text = "按时间排序" if self.sort_mode == "time" else "双击便签 · 拖动排序"
+        self.tip = tk.Label(foot, text=tip_text, bg=P.bg,
                             fg=P.fg_faint, font=self.f_small)
         self.tip.pack(side="right", padx=(4, 2))
 
@@ -642,6 +646,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 self._tray.stop()
             except Exception:
                 pass
+        try:
+            self.store.close()
+        except Exception:
+            pass
         try:
             self.root.after(0, self.root.destroy)
         except Exception:

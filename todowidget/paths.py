@@ -14,4 +14,5 @@ else:
     APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 DATA_FILE = os.path.join(APP_DIR, "todo_data.json")
+DB_FILE = os.path.join(APP_DIR, "todo_data.db")
 CONF_FILE = os.path.join(APP_DIR, "todo_config.json")

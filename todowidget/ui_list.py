@@ -2,10 +2,11 @@
 """清单列表: 渲染、勾选、改名、拖动排序、右键菜单"""
 
 import tkinter as tk
+from datetime import datetime, timedelta
 from tkinter import messagebox
 
 from . import theme as T
-from .store import leaf_stats, new_item, walk
+from .store import leaf_stats, new_item, now_str, walk
 from .theme import P
 from .utils import FakeEvent
 
@@ -13,6 +14,37 @@ BOX_OFF = "\u2610"  # ☐ 没有图标时的兜底
 BOX_ON = "\u2611"   # ☑
 
 class ListViewMixin:
+    def item_time(self, it):
+        """这条在它所在页签里该按哪个时间排"""
+        if self.tab == "done":
+            return it.get("completed_at") or it.get("created_at") or ""
+        return it.get("created_at") or ""
+
+    def format_day(self, day):
+        """隔板上显示的日期"""
+        if not day:
+            return "未知日期"
+        today = datetime.now().strftime("%Y-%m-%d")
+        yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+        if day == today:
+            return "今天 · " + day[5:]
+        if day == yesterday:
+            return "昨天 · " + day[5:]
+        return day
+
+    def ordered_roots(self):
+        """当前页签要显示的根条目; 按时间模式时排好序"""
+        want_done = self.tab == "done"
+        roots = []
+        for it in self.store.items:
+            if bool(it.get("done")) != want_done:
+                continue
+            roots.append(it)
+        if self.sort_mode != "time":
+            return roots
+        newest_first = want_done
+        return sorted(roots, key=self.item_time, reverse=newest_first)
+
     def refresh(self, sync_open=True):
         t = self.tree
         sel = t.focus()
@@ -31,41 +63,50 @@ class ListViewMixin:
         self._hover = None
         self._marked = None
 
-        def add(parent, items):
-            for it in items:
-                # 只看根节点的完成状态: 一个根条目要么整条在"未完成", 要么整条在"已完成"
-                if not parent and bool(it.get("done")) != (self.tab == "done"):
-                    continue
-                kids = it.get("children") or []
-                done = bool(it.get("done"))
-                if self.img_off is not None:
-                    text = " " + (it["text"] or "(未命名)")
-                    image = self.img_on if done else self.img_off
-                else:
-                    text = "{} {}".format(BOX_ON if done else BOX_OFF,
-                                          it["text"] or "(未命名)")
-                    image = None
-                if kids:
-                    d, n = leaf_stats(it)
-                    text += "  ·  {}/{}".format(d, n)
-                    tag = "group_done" if done else "group"
-                else:
-                    tag = "item_done" if done else "item"
-                note = (it.get("note") or "").strip()
-                if note:
-                    text += "  \u270e"
-                iid = it["id"]
-                if iid in open_state:
-                    it["open"] = open_state[iid]
-                options = {"iid": iid, "text": text, "tags": (tag,),
-                           "open": it.get("open", True)}
-                if image is not None:
-                    options["image"] = image
-                t.insert(parent, "end", **options)
-                self._refs[iid] = {"item": it, "list": items}
-                add(iid, kids)
+        def insert_item(parent, it, items):
+            kids = it.get("children") or []
+            done = bool(it.get("done"))
+            if self.img_off is not None:
+                text = " " + (it["text"] or "(未命名)")
+                image = self.img_on if done else self.img_off
+            else:
+                text = "{} {}".format(BOX_ON if done else BOX_OFF,
+                                      it["text"] or "(未命名)")
+                image = None
+            if kids:
+                d, n = leaf_stats(it)
+                text += "  ·  {}/{}".format(d, n)
+                tag = "group_done" if done else "group"
+            else:
+                tag = "item_done" if done else "item"
+            note = (it.get("note") or "").strip()
+            if note:
+                text += "  \u270e"
+            iid = it["id"]
+            if iid in open_state:
+                it["open"] = open_state[iid]
+            options = {"iid": iid, "text": text, "tags": (tag,),
+                       "open": it.get("open", True)}
+            if image is not None:
+                options["image"] = image
+            t.insert(parent, "end", **options)
+            self._refs[iid] = {"item": it, "list": items}
+            for kid in kids:
+                insert_item(iid, kid, kids)
 
-        add("", self.store.items)
+        roots = self.ordered_roots()
+        if self.sort_mode == "time":
+            shown_day = None
+            for it in roots:
+                day = self.item_time(it)[:10]
+                if day != shown_day:
+                    shown_day = day
+                    t.insert("", "end", iid="__sep__" + (day or "none"),
+                             tags=("sep",), text="  " + self.format_day(day))
+                insert_item("", it, self.store.items)
+        else:
+            for it in roots:
+                insert_item("", it, self.store.items)
         if not t.get_children():
             t.insert("", "end", iid="__empty__", tags=("empty",),
                      text="  （还没有已完成的任务）" if self.tab == "done"
@@ -147,13 +188,23 @@ class ListViewMixin:
     # ---------------- 渲染 ----------------
 
     def normalize(self):
-        """组的状态 = 所有子项都完成"""
+        """组的状态 = 所有子项都完成, 同时维护完成时间"""
         def walk_up(items):
             for it in items:
                 kids = it.setdefault("children", [])
                 walk_up(kids)
-                if kids:
-                    it["done"] = all(k.get("done") for k in kids)
+                if not kids:
+                    continue
+                was_done = bool(it.get("done"))
+                now_done = all(k.get("done") for k in kids)
+                it["done"] = now_done
+                if now_done:
+                    if not was_done or not it.get("completed_at"):
+                        stamps = [k.get("completed_at") for k in kids
+                                  if k.get("completed_at")]
+                        it["completed_at"] = max(stamps) if stamps else now_str()
+                else:
+                    it["completed_at"] = None
         walk_up(self.store.items)
 
     def toggle(self, iid):
@@ -162,9 +213,15 @@ class ListViewMixin:
             return
         item = ref["item"]
         target = not item.get("done")
+        stamp = now_str()
 
         def apply(it):
             it["done"] = target
+            if target:
+                if not it.get("completed_at"):
+                    it["completed_at"] = stamp
+            else:
+                it["completed_at"] = None
             for k in it.get("children") or []:
                 apply(k)
 
@@ -239,6 +296,8 @@ class ListViewMixin:
         self.refresh()
 
     def move(self, delta):
+        if self.sort_mode == "time":
+            return  # 按时间排序时不能手动调顺序
         ref = self._refs.get(self.tree.focus())
         if not ref:
             return
@@ -266,7 +325,10 @@ class ListViewMixin:
 
     def on_press(self, e):
         iid = self.tree.identify_row(e.y)
-        self._drag_src = iid
+        if self.sort_mode == "time":
+            self._drag_src = None  # 按时间排序时禁止拖动
+        else:
+            self._drag_src = iid
         self._drag_xy = (e.x, e.y)
         self._dragging = False
         self._drop = None
@@ -553,7 +615,10 @@ class ListViewMixin:
 
     def row_content_x(self, iid):
         """某一行的正文从哪个 x 开始 (跳过展开箭头和勾选框)"""
-        bbox = self.tree.bbox(iid)
+        try:
+            bbox = self.tree.bbox(iid)
+        except Exception:
+            return 0
         if not bbox:
             return 0
         left = bbox[0]
@@ -639,7 +704,8 @@ class ListViewMixin:
         if iid:
             self.tree.selection_set(iid)
             self.tree.focus(iid)
-        has = bool(iid)
+        has = bool(iid) and iid in self._refs
+        can_move = has and self.sort_mode != "time"
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label="新建任务", command=self.add_top)
         m.add_command(label="新建子任务", command=self.add_child, state="normal" if has else "disabled")
@@ -647,9 +713,9 @@ class ListViewMixin:
                       state="normal" if has else "disabled")
         m.add_separator()
         m.add_command(label="上移", command=lambda: self.move(-1),
-                      state="normal" if has else "disabled")
+                      state="normal" if can_move else "disabled")
         m.add_command(label="下移", command=lambda: self.move(1),
-                      state="normal" if has else "disabled")
+                      state="normal" if can_move else "disabled")
         m.add_separator()
         m.add_command(label="删除", command=self.delete_selected,
                       state="normal" if has else "disabled")

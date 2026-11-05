@@ -9,9 +9,12 @@ __pycache__/
 
 # 本机配置与私有数据, 不进仓库
 todo_config.json
+todo_data.db
+todo_data.db-journal
+todo_data.db-wal
 todo_data.json
 todo_data.json.tmp
-todo_selftest_data.json
+todo_selftest_data.*
 todo_error.log
 
 # 录制调试输出
