@@ -33,17 +33,32 @@ class ListViewMixin:
         return day
 
     def ordered_roots(self):
-        """当前页签要显示的根条目; 按时间模式时排好序"""
+        """当前页签要显示的根条目; 钉住的排最前, 按时间模式时再按时间排"""
         want_done = self.tab == "done"
-        roots = []
+        pinned = []
+        normal = []
         for it in self.store.items:
             if bool(it.get("done")) != want_done:
                 continue
-            roots.append(it)
-        if self.sort_mode != "time":
-            return roots
-        newest_first = want_done
-        return sorted(roots, key=self.item_time, reverse=newest_first)
+            if it.get("pinned"):
+                pinned.append(it)
+            else:
+                normal.append(it)
+        if self.sort_mode == "time":
+            newest_first = want_done
+            normal.sort(key=self.item_time, reverse=newest_first)
+        return pinned + normal
+
+    def pinned_first(self, items):
+        """同一层里把钉住的提到前面"""
+        pinned = []
+        normal = []
+        for it in items:
+            if it.get("pinned"):
+                pinned.append(it)
+            else:
+                normal.append(it)
+        return pinned + normal
 
     def refresh(self, sync_open=True):
         t = self.tree
@@ -86,12 +101,13 @@ class ListViewMixin:
             if iid in open_state:
                 it["open"] = open_state[iid]
             options = {"iid": iid, "text": text, "tags": (tag,),
-                       "open": it.get("open", True)}
+                       "open": it.get("open", True),
+                       "values": ("\U0001F4CC",) if it.get("pinned") else ("",)}
             if image is not None:
                 options["image"] = image
             t.insert(parent, "end", **options)
             self._refs[iid] = {"item": it, "list": items}
-            for kid in kids:
+            for kid in self.pinned_first(kids):
                 insert_item(iid, kid, kids)
 
         roots = self.ordered_roots()
@@ -333,6 +349,29 @@ class ListViewMixin:
         self._dragging = False
         self._drop = None
         self._press_box = iid if (iid and self.clicked_box(e.x, e.y)) else None
+        self._press_pin = iid if (iid and self.clicked_pin(e.x)) else None
+
+    def clicked_pin(self, x):
+        """是不是点在了右边的图钉格子里"""
+        try:
+            column = self.tree.identify_column(x)
+        except Exception:
+            return False
+        return column == "#1"
+
+    def toggle_pin(self, iid):
+        """钉住/取消钉住: 钉住的条目排在同一层最前面"""
+        ref = self._refs.get(iid)
+        if not ref:
+            return
+        item = ref["item"]
+        item["pinned"] = not item.get("pinned")
+        self.store.save()
+        self.refresh()
+        if self.tree.exists(iid):
+            self.tree.focus(iid)
+            self.tree.selection_set(iid)
+            self.tree.see(iid)
 
     def on_drag(self, e):
         if not self._drag_src:
@@ -396,14 +435,20 @@ class ListViewMixin:
     def on_release(self, e):
         dragging, src = self._dragging, self._drag_src
         box = getattr(self, "_press_box", None)
+        pin = getattr(self, "_press_pin", None)
         self._drag_src = None
         self._dragging = False
         self._press_box = None
+        self._press_pin = None
         self.hide_ghost()
         self.hide_hint()
         if dragging:
             if src:
                 self.drop(src, self._drop)
+            return "break"
+        if pin and self.tree.exists(pin):
+            # 放到事件之后再做, 免得在树的点击事件里重建整个列表
+            self.root.after(0, self.toggle_pin, pin)
             return "break"
         if box and self.tree.exists(box):
             # 放到事件之后再做, 免得在树的点击事件里重建整个列表
@@ -706,12 +751,18 @@ class ListViewMixin:
             self.tree.focus(iid)
         has = bool(iid) and iid in self._refs
         can_move = has and self.sort_mode != "time"
+        pinned = False
+        if has:
+            pinned = bool(self._refs[iid]["item"].get("pinned"))
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label="新建任务", command=self.add_top)
         m.add_command(label="新建子任务", command=self.add_child, state="normal" if has else "disabled")
         m.add_command(label="重命名", command=lambda: self.start_edit(self.tree.focus()),
                       state="normal" if has else "disabled")
         m.add_separator()
+        m.add_command(label="取消钉住" if pinned else "钉到最前",
+                      command=lambda: self.toggle_pin(self.tree.focus()),
+                      state="normal" if has else "disabled")
         m.add_command(label="上移", command=lambda: self.move(-1),
                       state="normal" if can_move else "disabled")
         m.add_command(label="下移", command=lambda: self.move(1),

@@ -252,7 +252,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                         relief="flat", width=7)
 
         self.tree = ttk.Treeview(body, show="tree", style="Todo.Treeview",
-                                 selectmode="browse")
+                                 selectmode="browse", columns=("pin",))
+        self.tree.column("pin", width=26, minwidth=18, stretch=False,
+                         anchor="center")
         sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview,
                            style="Todo.Vertical.TScrollbar")
         self.scroll = sb

@@ -6,7 +6,7 @@ import time
 
 from .app import TodoApp
 from .paths import APP_DIR, CONF_FILE
-from .store import Store
+from .store import Store, new_item
 from .utils import FakeEvent, TkApp
 
 def run_selftest():
@@ -25,9 +25,10 @@ def run_selftest():
 
     TodoApp.start_tray = lambda self: None
     root = TkApp()
-    app = TodoApp(root, store=Store(data_path))
+    app = TodoApp(root, store=Store(data_path, import_json=False))
     if app.collapsed:
         app.set_folded(False)
+    app.sort_mode = "manual"   # 自检不受本机排序设置影响
     app.set_tab("pending")
     results = []
 
@@ -139,6 +140,23 @@ def run_selftest():
 
     # 完成后应该记下完成时间
     check("勾选会记录完成时间", bool(target_item.get("completed_at")))
+
+    # 图钉: 钉住的排到同层最前面
+    app.set_tab("pending")
+    while len(app.store.items) < 2:
+        app.store.items.append(new_item("自检占位"))
+    app.store.save()
+    settle()
+    rows = app.tree.get_children()
+    if len(rows) >= 2:
+        last_row = rows[-1]
+        app.toggle_pin(last_row)
+        settle()
+        check("钉住的条目排到最前", app.tree.get_children()[0] == last_row)
+        check("钉住状态会存下来",
+              bool(app._refs[last_row]["item"].get("pinned")))
+        app.toggle_pin(last_row)
+        settle()
 
     # 按时间排序: 出现日期隔板, 且禁止拖动
     app.sort_mode = "time"

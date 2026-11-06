@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS items (
     note         TEXT,
     position     INTEGER NOT NULL DEFAULT 0,
     open         INTEGER NOT NULL DEFAULT 1,
+    pinned       INTEGER NOT NULL DEFAULT 0,
     created_at   TEXT,
     completed_at TEXT
 );
@@ -54,15 +55,16 @@ def day_of(value):
 def new_item(text):
     """新建一个任务节点"""
     return {"id": uuid.uuid4().hex[:8], "text": text, "done": False,
-            "children": [], "open": True,
+            "children": [], "open": True, "pinned": False,
             "created_at": now_str(), "completed_at": None}
 
 
 class Store:
     """多份清单; 每份清单是 {id, name, items}"""
 
-    def __init__(self, path=DB_FILE):
+    def __init__(self, path=DB_FILE, import_json=True):
         self.path = path
+        self.import_json = import_json
         self.lists = []
         self.current = ""
         self.conn = None
@@ -138,8 +140,21 @@ class Store:
             os.makedirs(folder, exist_ok=True)
         self.conn = sqlite3.connect(self.path)
         self.conn.executescript(SCHEMA)
+        self._ensure_columns()
         self.conn.commit()
         return self.conn
+
+    def _ensure_columns(self):
+        """老库补字段(比如后来加的 pinned)"""
+        try:
+            exists = self.conn.execute(
+                "PRAGMA table_info(items)").fetchall()
+        except Exception:
+            return
+        names = [row[1] for row in exists]
+        if "pinned" not in names:
+            self.conn.execute(
+                "ALTER TABLE items ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
 
     def close(self):
         if self.conn is not None:
@@ -160,7 +175,7 @@ class Store:
             self._load_rows(rows)
             return
 
-        if not had_db and os.path.exists(DATA_FILE):
+        if not had_db and self.import_json and os.path.exists(DATA_FILE):
             if self._import_json(DATA_FILE):
                 self.save()
                 return
@@ -174,7 +189,7 @@ class Store:
         self.lists = []
         items = self.conn.execute(
             "SELECT id, list_id, parent_id, text, done, note, position, open,"
-            " created_at, completed_at FROM items"
+            " created_at, completed_at, pinned FROM items"
             " ORDER BY position, rowid").fetchall()
 
         by_id = {}
@@ -186,9 +201,10 @@ class Store:
 
         for row in items:
             (iid, list_id, parent_id, text, done, note, position, is_open,
-             created_at, completed_at) = row
+             created_at, completed_at, pinned) = row
             node = {"id": iid, "text": text or "", "done": bool(done),
                     "children": [], "open": bool(is_open),
+                    "pinned": bool(pinned),
                     "created_at": created_at or now_str(),
                     "completed_at": completed_at}
             if note:
@@ -244,13 +260,14 @@ class Store:
         for pos, it in enumerate(items):
             conn.execute(
                 "INSERT INTO items(id, list_id, parent_id, text, done, note,"
-                " position, open, created_at, completed_at)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                " position, open, created_at, completed_at, pinned)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (it["id"], list_id, parent_id, it.get("text") or "",
                  1 if it.get("done") else 0, it.get("note") or "",
                  pos, 1 if it.get("open", True) else 0,
                  it.get("created_at") or now_str(),
-                 it.get("completed_at")))
+                 it.get("completed_at"),
+                 1 if it.get("pinned") else 0))
             self._save_items(conn, list_id, it["id"],
                              it.get("children") or [])
 
@@ -291,6 +308,7 @@ class Store:
                 it["completed_at"] = stamp
             it["children"] = self._upgrade_items(it.get("children") or [])
             it.setdefault("open", True)
+            it.setdefault("pinned", False)
             out.append(it)
         return out
 
