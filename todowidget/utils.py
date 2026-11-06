@@ -77,6 +77,45 @@ def send_to_bottom(window):
         return False
 
 
+class AccentPolicy(ctypes.Structure):
+    """win32 的 AccentPolicy, 磨砂玻璃用"""
+
+    _fields_ = [("AccentState", ctypes.c_int),
+                ("AccentFlags", ctypes.c_int),
+                ("GradientColor", ctypes.c_uint),
+                ("AnimationId", ctypes.c_int)]
+
+
+class WindowCompositionAttributeData(ctypes.Structure):
+    """SetWindowCompositionAttribute 的参数结构"""
+
+    _fields_ = [("Attribute", ctypes.c_int),
+                ("Data", ctypes.c_void_p),
+                ("SizeOfData", ctypes.c_size_t)]
+
+
+def enable_acrylic(window, tint=(24, 26, 32, 205)):
+    """打开 Windows 亚克力/磨砂效果 (Win10 1803+ 才有, 失败就算了)"""
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(window.winfo_id())
+        if not hwnd:
+            hwnd = window.winfo_id()
+        accent = AccentPolicy()
+        accent.AccentState = 4        # ACCENT_ENABLE_ACRYLICBLURBEHIND
+        accent.AccentFlags = 2        # 让整个窗口都吃这个效果
+        red, green, blue, alpha = tint
+        accent.GradientColor = ((alpha << 24) | (blue << 16) | (green << 8) | red)
+        data = WindowCompositionAttributeData()
+        data.Attribute = 19           # WCA_ACCENT_POLICY
+        data.SizeOfData = ctypes.sizeof(accent)
+        data.Data = ctypes.cast(ctypes.byref(accent), ctypes.c_void_p)
+        result = user32.SetWindowCompositionAttribute(hwnd, ctypes.byref(data))
+        return bool(result)
+    except Exception:
+        return False
+
+
 def round_corners(window, radius=12):
     """给无边框窗口切圆角"""
     try:

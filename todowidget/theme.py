@@ -66,7 +66,37 @@ THEMES = {
 THEME_NAMES = (("dark", "深色"), ("light", "浅色"),
                ("forest", "墨绿"), ("sand", "暖沙"))
 
+TEXTURE_NAMES = (("solid", "纯色"), ("paper", "纸质"), ("glass", "磨砂"))
+
+# 纸质质感: 暖米色, 不管当前主题是什么都用这套
+PAPER_SCHEME = dict(
+    bg="#f4ecdc", bg_alt="#ece2cd", head="#f0e8d6", border="#d5c5a3",
+    group_bg="#e9dfc7", hover="#e3d7bd", fg="#3a3226", fg_dim="#7e735c",
+    fg_faint="#a99d84", accent="#b07b32", done="#a89b82",
+    group="#221d15", sel="#dcc9a2")
+
 FONTS = ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", "TkDefaultFont")
+
+
+def apply_palette(scheme, accent=None):
+    """按一套配色改 P; accent 只影响强调色"""
+    P.bg = scheme["bg"]
+    P.bg_alt = scheme["bg_alt"]
+    P.head = scheme["head"]
+    P.border = scheme["border"]
+    P.group_bg = scheme["group_bg"]
+    P.hover = scheme["hover"]
+    P.fg = scheme["fg"]
+    P.fg_dim = scheme["fg_dim"]
+    P.fg_faint = scheme["fg_faint"]
+    P.done = scheme["done"]
+    P.group = scheme["group"]
+    P.sel = scheme["sel"]
+    if accent:
+        P.accent = accent
+    else:
+        P.accent = scheme["accent"]
+    P.ghost_bg = P.accent
 
 
 def set_theme(name, accent=None):
@@ -74,25 +104,12 @@ def set_theme(name, accent=None):
     theme = THEMES.get(name)
     if theme is None:
         theme = THEMES["dark"]
+    apply_palette(theme, accent)
 
-    P.bg = theme["bg"]
-    P.bg_alt = theme["bg_alt"]
-    P.head = theme["head"]
-    P.border = theme["border"]
-    P.group_bg = theme["group_bg"]
-    P.hover = theme["hover"]
-    P.fg = theme["fg"]
-    P.fg_dim = theme["fg_dim"]
-    P.fg_faint = theme["fg_faint"]
-    P.done = theme["done"]
-    P.group = theme["group"]
-    P.sel = theme["sel"]
 
-    if accent:
-        P.accent = accent
-    else:
-        P.accent = theme["accent"]
-    P.ghost_bg = P.accent
+def use_paper(accent=None):
+    """切到纸质配色"""
+    apply_palette(PAPER_SCHEME, accent)
 
 
 def pick_font(root, size, weight="normal", overstrike=False):

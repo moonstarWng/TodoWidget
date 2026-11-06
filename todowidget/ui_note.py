@@ -22,7 +22,7 @@ from . import theme as T
 from .paths import APP_DIR
 from .store import walk as _walk
 from .theme import P
-from .utils import MonitorInfo, open_url, round_corners
+from .utils import MonitorInfo, enable_acrylic, open_url, round_corners
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
 LINK_TAIL = ".,;:!?)]}\u3002\uff0c\u3001\uff09\u300b"
@@ -207,6 +207,8 @@ class NoteMixin:
         win.geometry("{}x{}+{}+{}".format(width, height, pos[0], pos[1]))
         win.lift()
         win.after(30, lambda w=win: round_corners(w, 14))
+        if getattr(self, "texture", "solid") == "glass":
+            win.after(80, lambda w=win: enable_acrylic(w))
         self._note_opened_at = time.time()
         self.update_note_pin_button(state)
 

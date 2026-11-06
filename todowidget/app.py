@@ -16,8 +16,8 @@ except Exception:
 
 from .paths import CONF_FILE
 from .store import Store
-from .theme import P, hex_to_rgb, pick_font, set_theme
-from .utils import HAS_TRAY, make_icon, place_window
+from .theme import P, hex_to_rgb, pick_font, set_theme, use_paper
+from .utils import HAS_TRAY, enable_acrylic, make_icon, place_window
 
 if HAS_TRAY:
     from PIL import Image, ImageChops, ImageDraw, ImageTk
@@ -54,6 +54,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._expanded_size = None
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
+        self.texture = self.conf.get("texture", "solid")
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
         self.settings_win = None
@@ -63,7 +64,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._drag_from = (0, 0)
         self._drag_moved = False
 
-        set_theme(self.theme, self.accent)
+        self.apply_palette_choice()
         self.build_ui()
         self.normalize()
         self.refresh()
@@ -86,7 +87,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def save_conf(self):
         self.conf.update(mode=self.mode, topmost=self.topmost, alpha=self.alpha,
                          collapsed=bool(self.collapsed), tab=self.tab,
-                         sort_mode=self.sort_mode,
+                         sort_mode=self.sort_mode, texture=self.texture,
                          theme=self.theme, accent=self.accent)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -106,7 +107,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     # ---------------- 界面 ----------------
 
+    def apply_palette_choice(self):
+        """按当前主题和质感选一套配色"""
+        if self.texture == "paper":
+            use_paper(self.accent)
+        else:
+            set_theme(self.theme, self.accent)
+
     def build_ui(self):
+        self.apply_palette_choice()
         r = self.root
         is_desktop = self.mode == "desktop"
         r.title("待办清单")
@@ -488,9 +497,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r = self.root
         r.withdraw()
         r.overrideredirect(self.mode == "desktop")
+        glass = (self.texture == "glass")
+        alpha = float(self.alpha)
+        if glass:
+            alpha = 1.0
         try:
             r.attributes("-topmost", bool(self.topmost))
-            r.attributes("-alpha", float(self.alpha))
+            r.attributes("-alpha", alpha)
         except Exception:
             pass
         geom = self.conf.get("geom")
@@ -501,6 +514,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             r.geometry("330x460+{}+{}".format(sw - 370, max(70, sh // 10)))
         r.deiconify()
         r.lift()
+        if glass:
+            r.after(80, lambda: enable_acrylic(r))
         if self.mode == "desktop" and not self.topmost:
             r.after(150, self.sink)
         r.after(60, self.round_window)

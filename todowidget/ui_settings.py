@@ -4,7 +4,7 @@
 import tkinter as tk
 from tkinter import colorchooser
 
-from .theme import P, THEMES, THEME_NAMES, best_text_color, set_theme
+from .theme import P, TEXTURE_NAMES, THEMES, THEME_NAMES, best_text_color, set_theme
 from .utils import make_icon, round_corners
 
 class SettingsMixin:
@@ -64,6 +64,13 @@ class SettingsMixin:
         self.make_sort_chip(sort_row, "manual", "手动拖动")
         self.make_sort_chip(sort_row, "time", "按时间")
 
+        tk.Label(body, text="质感", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small).pack(anchor="w", padx=12, pady=(0, 4))
+        texture_row = tk.Frame(body, bg=P.bg)
+        texture_row.pack(fill="x", padx=12)
+        for key, label in TEXTURE_NAMES:
+            self.make_texture_chip(texture_row, key, label)
+
         drag = {}
 
         def start_move(ev):
@@ -79,7 +86,7 @@ class SettingsMixin:
         head.bind("<Button-1>", start_move)
         head.bind("<B1-Motion>", do_move)
 
-        width, height = 262, 214
+        width, height = 262, 262
         if pos is None:
             right = self.root.winfo_rootx() + self.root.winfo_width()
             bottom = self.root.winfo_rooty() + self.root.winfo_height()
@@ -107,6 +114,33 @@ class SettingsMixin:
                         padx=12, pady=4, cursor="hand2")
         chip.pack(side="left", padx=(0, 8))
         chip.bind("<Button-1>", lambda ev: self.set_sort_mode(key))
+
+    def make_texture_chip(self, parent, key, label):
+        """质感的切换按钮"""
+        chosen = (key == self.texture)
+        if chosen:
+            bg = P.accent
+            fg = best_text_color(P.accent)
+        else:
+            bg = P.bg_alt
+            fg = P.fg_dim
+        chip = tk.Label(parent, text=label, bg=bg, fg=fg, font=self.f_small,
+                        padx=12, pady=4, cursor="hand2")
+        chip.pack(side="left", padx=(0, 8))
+        chip.bind("<Button-1>", lambda ev: self.set_texture(key))
+
+    def set_texture(self, key):
+        """切换质感并重建界面"""
+        if key == self.texture:
+            return
+        pos = None
+        if self.settings_win is not None:
+            pos = (self.settings_win.winfo_x(), self.settings_win.winfo_y())
+        self.close_settings()
+        self.texture = key
+        self.save_conf()
+        self.reload_ui()
+        self.open_settings(pos)
 
     def set_sort_mode(self, mode):
         """切换排序方式并重建设置窗口"""
