@@ -187,6 +187,10 @@ class SettingsMixin:
     def reload_ui(self):
         """配色变了就整块重建界面, 省得一个个去改颜色"""
         self.finish_edit()
+        pinned_ids = []
+        for note_id, state in self.notes.items():
+            if state.get("pinned"):
+                pinned_ids.append(note_id)
         self.close_note()
         for widget in list(self.root.winfo_children()):
             try:
@@ -201,6 +205,11 @@ class SettingsMixin:
         self.apply_window()
         if was_folded:
             self.set_folded(True)
+
+        for note_id in pinned_ids:
+            item = self.store.find_item(note_id)
+            if item is not None:
+                self.create_note(item, restore=True)
 
         if self._tray is not None:
             try:

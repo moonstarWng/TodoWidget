@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""便签窗口: Markdown 预览、自动续列表、超链接识别"""
+"""便签窗口: Markdown 预览、自动续列表、超链接识别、钉到桌面"""
 
 import ctypes
 import re
@@ -8,13 +8,17 @@ import time
 import tkinter as tk
 
 from . import theme as T
+from .store import walk as _walk
 from .theme import P
-from .utils import MonitorInfo, open_url
+from .utils import MonitorInfo, open_url, send_to_bottom
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
 LINK_TAIL = ".,;:!?)]}\u3002\uff0c\u3001\uff09\u300b"
 
+
 class NoteMixin:
+    """便签相关: 一个任务可以开一张便签, 钉住的便签会留在桌面上"""
+
     def screen_center(self, width, height):
         """算出让窗口落在主窗体那块屏幕正中间的位置"""
         try:
@@ -36,24 +40,39 @@ class NoteMixin:
         screen_h = self.root.winfo_screenheight()
         return (screen_w - width) // 2, (screen_h - height) // 2
 
+    # ---------------- 打开 / 关闭 ----------------
     def open_note(self, iid):
+        """打开某个任务的便签; 已经开过就把窗口提到前面"""
         ref = self._refs.get(iid)
         if ref is None:
             return
         self.finish_edit()
-        if self.note_win is not None:
-            self.close_note()
-
         item = ref["item"]
-        self.note_item = item
-        self.note_raw = item.get("note") or ""
-        self.note_editing = True
+        state = self.notes.get(item["id"])
+        if state is not None:
+            try:
+                state["win"].lift()
+                state["text"].focus_set()
+            except Exception:
+                pass
+            return
+        self.create_note(item)
+
+    def create_note(self, item, restore=False):
+        """真正建一个便签窗口"""
+        note_id = item["id"]
+        pinned = bool(item.get("note_pinned"))
 
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
-        win.attributes("-topmost", True)
+        win.attributes("-topmost", not pinned)
         win.configure(bg=P.note_edge)
-        self.note_win = win
+
+        state = {"id": note_id, "item": item, "win": win, "text": None,
+                 "editing": True, "raw": item.get("note") or "",
+                 "pinned": pinned, "link_job": None, "mode_btn": None,
+                 "pin_btn": None}
+        self.notes[note_id] = state
 
         body = tk.Frame(win, bg=P.note_bg)
         body.pack(fill="both", expand=True, padx=1, pady=1)
@@ -75,19 +94,27 @@ class NoteMixin:
         close_btn = tk.Label(head, text="\u2715", bg=P.note_head, fg=P.note_dim,
                              font=self.f_item, width=2, cursor="hand2")
         close_btn.pack(side="right", padx=4)
-        close_btn.bind("<Button-1>", lambda ev: self.close_note())
+        close_btn.bind("<Button-1>", lambda ev, s=state: self.close_note(s["id"]))
         close_btn.bind("<Enter>", lambda ev: close_btn.configure(fg=P.note_fg))
         close_btn.bind("<Leave>", lambda ev: close_btn.configure(fg=P.note_dim))
 
-        self.btn_note_mode = tk.Label(head, text="\u9884\u89c8", bg=P.note_head,
-                                      fg=P.note_dim, font=self.f_small,
-                                      cursor="hand2", padx=6)
-        self.btn_note_mode.pack(side="right")
-        self.btn_note_mode.bind("<Button-1>", lambda ev: self.note_toggle_mode())
-        self.btn_note_mode.bind("<Enter>",
-                                lambda ev: self.btn_note_mode.configure(fg=P.note_fg))
-        self.btn_note_mode.bind("<Leave>",
-                                lambda ev: self.btn_note_mode.configure(fg=P.note_dim))
+        mode_btn = tk.Label(head, text="\u9884\u89c8", bg=P.note_head,
+                            fg=P.note_dim, font=self.f_small,
+                            cursor="hand2", padx=6)
+        mode_btn.pack(side="right")
+        mode_btn.bind("<Button-1>", lambda ev, s=state: self.note_toggle_mode(s))
+        mode_btn.bind("<Enter>", lambda ev: mode_btn.configure(fg=P.note_fg))
+        mode_btn.bind("<Leave>", lambda ev: mode_btn.configure(fg=P.note_dim))
+        state["mode_btn"] = mode_btn
+
+        pin_btn = tk.Label(head, text="\U0001F4CC", bg=P.note_head,
+                           fg=P.note_dim, font=self.f_small,
+                           cursor="hand2", padx=6)
+        pin_btn.pack(side="right")
+        pin_btn.bind("<Button-1>", lambda ev, s=state: self.toggle_note_pin(s))
+        pin_btn.bind("<Enter>", lambda ev: pin_btn.configure(fg=P.note_fg))
+        pin_btn.bind("<Leave>", lambda ev: pin_btn.configure(fg=P.note_dim))
+        state["pin_btn"] = pin_btn
 
         hint = tk.Label(body, text="# 标题 · - 列表 · 1. 编号 · **加粗** · 网址可点",
                         bg=P.note_bg, fg=P.note_dim, font=self.f_small, anchor="w")
@@ -98,7 +125,8 @@ class NoteMixin:
                        font=self.f_item, padx=12, pady=10, undo=True,
                        selectbackground="#e6d7a8", selectforeground=P.note_fg)
         text.pack(fill="both", expand=True)
-        self.note_text = text
+        state["text"] = text
+        self.note_by_widget[text] = state
 
         text.tag_configure("h1", font=self.f_note_h1, foreground=P.note_fg,
                            spacing1=8, spacing3=4)
@@ -116,42 +144,114 @@ class NoteMixin:
         text.tag_bind("link", "<Leave>",
                       lambda ev: text.configure(cursor="xterm"))
 
-        if self.note_raw:
-            text.insert("1.0", self.note_raw)
-        self.root.after(30, self.note_mark_links)
+        if state["raw"]:
+            text.insert("1.0", state["raw"])
 
-        drag = {}
+        drag = {"dx": 0, "dy": 0}
 
-        def start_move(ev):
-            drag["dx"] = ev.x_root - win.winfo_x()
-            drag["dy"] = ev.y_root - win.winfo_y()
+        def start_move(ev, w=win):
+            drag["dx"] = ev.x_root - w.winfo_x()
+            drag["dy"] = ev.y_root - w.winfo_y()
 
-        def do_move(ev):
-            if "dx" not in drag:
-                return
+        def do_move(ev, w=win):
             nx = ev.x_root - drag["dx"]
             ny = ev.y_root - drag["dy"]
-            win.geometry("+{}+{}".format(nx, ny))
+            w.geometry("+{}+{}".format(nx, ny))
+            drag["moved"] = True
+
+        def end_move(ev, s=state):
+            if drag.get("moved"):
+                drag["moved"] = False
+                self.save_note_pos(s)
 
         for widget in (head, title, strip):
             widget.bind("<Button-1>", start_move)
             widget.bind("<B1-Motion>", do_move)
+            widget.bind("<ButtonRelease-1>", end_move)
 
-        win.bind("<Escape>", lambda ev: self.close_note())
-        text.bind("<Escape>", lambda ev: self.close_note())
+        win.bind("<Escape>", lambda ev, s=state: self.close_note(s["id"]))
+        text.bind("<Escape>", lambda ev, s=state: self.close_note(s["id"]))
         text.bind("<Return>", self.note_on_return)
         text.bind("<KeyRelease>", self.note_schedule_links)
 
         width, height = 400, 320
-        x, y = self.screen_center(width, height)
-        win.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        pos = self.parse_note_pos(item.get("note_pos"))
+        if pos is None:
+            pos = self.screen_center(width, height)
+        win.geometry("{}x{}+{}+{}".format(width, height, pos[0], pos[1]))
         win.lift()
         text.focus_set()
         self._note_opened_at = time.time()
+        self.update_note_pin_button(state)
+
+        if not restore:
+            self.root.after(30, lambda s=state: self.note_mark_links(s))
+        if pinned:
+            win.after(60, lambda w=win: send_to_bottom(w))
+
+    # ---------------- 钉在桌面 ----------------
+    def toggle_note_pin(self, state):
+        """钉住/取消钉住: 钉住后留在桌面层, 点别处也不关"""
+        state["pinned"] = not state["pinned"]
+        item = state["item"]
+        item["note_pinned"] = state["pinned"]
+        if state["pinned"]:
+            item["note_pos"] = "{},{}".format(state["win"].winfo_x(),
+                                              state["win"].winfo_y())
+        self.store.save()
+        self.update_note_pin_button(state)
+        try:
+            state["win"].attributes("-topmost", not state["pinned"])
+        except Exception:
+            pass
+        if state["pinned"]:
+            state["win"].after(60, lambda w=state["win"]: send_to_bottom(w))
+        else:
+            state["win"].lift()
+
+    def update_note_pin_button(self, state):
+        """图钉按钮的样子跟着状态变"""
+        btn = state.get("pin_btn")
+        if btn is None:
+            return
+        if state["pinned"]:
+            btn.configure(bg=P.accent, fg="#ffffff")
+        else:
+            btn.configure(bg=P.note_head, fg=P.note_dim)
+
+    def parse_note_pos(self, value):
+        """'120,340' -> (120, 340)"""
+        if not value:
+            return None
+        try:
+            left, top = str(value).split(",")
+            return int(left), int(top)
+        except Exception:
+            return None
+
+    def save_note_pos(self, state):
+        """记住便签位置, 下次还开在这儿"""
+        win = state.get("win")
+        if win is None:
+            return
+        try:
+            state["item"]["note_pos"] = "{},{}".format(win.winfo_x(),
+                                                       win.winfo_y())
+            self.store.save()
+        except Exception:
+            pass
+
+    # ---------------- 编辑 / 预览 ----------------
+    def note_state_of(self, widget):
+        """从任意子控件找到它所属的便签状态"""
+        return self.note_by_widget.get(widget)
 
     def note_on_return(self, event):
         """回车自动续列表: - 续 - , 1. 续 2."""
-        widget = self.note_text
+        widget = event.widget
+        state = self.note_state_of(widget)
+        if state is None:
+            return None
         line_start = widget.index("insert linestart")
         line = widget.get(line_start, "insert")
 
@@ -181,48 +281,52 @@ class NoteMixin:
 
         return None
 
-    def note_toggle_mode(self):
-        if self.note_editing:
-            self.note_raw = self.note_text.get("1.0", "end-1c")
-            self.note_render()
-            self.note_editing = False
-            self.btn_note_mode.config(text="\u7f16\u8f91")
+    def note_toggle_mode(self, state):
+        widget = state["text"]
+        if state["editing"]:
+            state["raw"] = widget.get("1.0", "end-1c")
+            self.note_render(state)
+            state["editing"] = False
+            state["mode_btn"].config(text="\u7f16\u8f91")
             return
 
-        self.note_text.configure(state="normal")
-        self.note_text.delete("1.0", "end")
-        if self.note_raw:
-            self.note_text.insert("1.0", self.note_raw)
-        self.note_editing = True
-        self.btn_note_mode.config(text="\u9884\u89c8")
-        self.note_text.focus_set()
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        if state["raw"]:
+            widget.insert("1.0", state["raw"])
+        state["editing"] = True
+        state["mode_btn"].config(text="\u9884\u89c8")
+        widget.focus_set()
 
-    def note_render(self):
-        widget = self.note_text
-        raw = self.note_raw or ""
+    def note_render(self, state):
+        widget = state["text"]
+        raw = state["raw"] or ""
         widget.configure(state="normal")
         widget.delete("1.0", "end")
         for line in raw.split("\n"):
             self.note_render_line(widget, line)
         widget.configure(state="disabled")
-        self.note_mark_links()
+        self.note_mark_links(state)
 
     def note_schedule_links(self, event=None):
-        win = self.note_win
-        if win is None or not self.note_editing:
+        state = self.note_state_of(event.widget) if event is not None else None
+        if state is None:
             return
-        job = getattr(self, "_note_link_job", None)
+        if not state["editing"]:
+            return
+        win = state["win"]
+        job = state.get("link_job")
         if job is not None:
             try:
                 win.after_cancel(job)
             except Exception:
                 pass
-        self._note_link_job = win.after(350, self.note_mark_links)
+        state["link_job"] = win.after(350, lambda: self.note_mark_links(state))
 
-    def note_mark_links(self):
+    def note_mark_links(self, state):
         """把文里的网址标出来, 变成可点的链接"""
-        self._note_link_job = None
-        widget = self.note_text
+        state["link_job"] = None
+        widget = state["text"]
         if widget is None:
             return
         try:
@@ -238,10 +342,7 @@ class NoteMixin:
             end = "1.0+{}c".format(match.start() + len(url))
             widget.tag_add("link", start, end)
 
-    def note_link_at(self, index):
-        widget = self.note_text
-        if widget is None:
-            return None
+    def note_link_at(self, widget, index):
         ranges = widget.tag_ranges("link")
         for i in range(0, len(ranges), 2):
             start = ranges[i]
@@ -253,11 +354,9 @@ class NoteMixin:
         return None
 
     def note_link_click(self, event):
-        widget = self.note_text
-        if widget is None:
-            return None
+        widget = event.widget
         index = widget.index("@{},{}".format(event.x, event.y))
-        url = self.note_link_at(index)
+        url = self.note_link_at(widget, index)
         if not url:
             return None
         open_url(url)
@@ -331,21 +430,35 @@ class NoteMixin:
             else:
                 widget.insert("end", part)
 
-    def close_note(self):
-        win = self.note_win
-        if win is None:
-            return
-        text = self.note_text
-        item = self.note_item
-        editing = self.note_editing
-        raw = self.note_raw
+    # ---------------- 关闭 ----------------
+    def close_note(self, note_id=None, keep_pinned=False):
+        """关掉便签; 不给 id 就关全部, keep_pinned 时保留钉住的"""
+        if note_id is not None:
+            targets = [note_id]
+        else:
+            targets = list(self.notes.keys())
 
-        self.note_win = None
-        self.note_text = None
-        self.note_item = None
-        self.note_editing = True
-        self.note_raw = ""
-        self._note_link_job = None
+        for key in targets:
+            state = self.notes.get(key)
+            if state is None:
+                continue
+            if keep_pinned and state.get("pinned") and note_id is None:
+                continue
+            self._close_one(state)
+
+    def _close_one(self, state):
+        win = state["win"]
+        text = state["text"]
+        editing = state["editing"]
+        raw = state["raw"]
+        item = state["item"]
+
+        if state.get("pinned"):
+            self.save_note_pos(state)
+
+        self.notes.pop(state["id"], None)
+        if text is not None:
+            self.note_by_widget.pop(text, None)
 
         content = ""
         if editing and text is not None:
@@ -360,6 +473,7 @@ class NoteMixin:
             win.destroy()
         except Exception:
             pass
+
         if item is None:
             return
         if content:
@@ -369,4 +483,11 @@ class NoteMixin:
         self.store.save()
         self.refresh()
 
-    # ---------------- 设置 ----------------
+    def reopen_pinned_notes(self):
+        """启动或换主题后, 把钉在桌面上的便签重新摆出来"""
+        for item, _ in _walk(self.store.items):
+            if not item.get("note_pinned"):
+                continue
+            if item["id"] in self.notes:
+                continue
+            self.create_note(item, restore=True)

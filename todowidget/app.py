@@ -57,12 +57,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
         self.settings_win = None
-        self.note_win = None
-        self.note_text = None
-        self.note_item = None
-        self.note_raw = ""
-        self.note_editing = True
-        self._note_link_job = None
+        self.notes = {}
+        self.note_by_widget = {}
         self.prompt_win = None
         self._drag_from = (0, 0)
         self._drag_moved = False
@@ -76,6 +72,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if folded:
             self.set_folded(True)
         self.start_tray()
+        self.root.after(300, self.reopen_pinned_notes)
 
     # ---------------- 配置 ----------------
 
@@ -455,12 +452,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
 
     def on_any_click(self, e):
-        """在窗口里点任何别的地方都结束改名 / 收起便签"""
-        if self.note_win is not None:
+        """在窗口里点任何别的地方都结束改名 / 收起没钉住的便签"""
+        if self.notes:
             # 双击那次点击也会走到这里, 刚弹出来的便签别马上关掉
             opened_at = getattr(self, "_note_opened_at", 0.0)
             if time.time() - opened_at > 0.4:
-                self.close_note()
+                self.close_note(keep_pinned=True)
         if self._editor is None:
             return
         if e.widget is self._editor:
@@ -643,6 +640,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def quit(self):
         self.save_geom()
+        self.close_note()
         if self._tray is not None:
             try:
                 self._tray.stop()

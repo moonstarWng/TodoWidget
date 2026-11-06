@@ -61,6 +61,21 @@ def place_window(window, x, y, width, height):
     except Exception:
         return False
 
+
+def send_to_bottom(window):
+    """把窗口压到所有普通窗口下面(贴着桌面)"""
+    try:
+        user32 = ctypes.windll.user32
+        hwnd = user32.GetParent(window.winfo_id())
+        if not hwnd:
+            hwnd = window.winfo_id()
+        HWND_BOTTOM = 1
+        flags = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
+        user32.SetWindowPos(hwnd, HWND_BOTTOM, 0, 0, 0, 0, flags)
+        return True
+    except Exception:
+        return False
+
 class FakeEvent:
     """测试用的事件对象, 字段和 Tk 事件保持一致"""
 

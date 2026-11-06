@@ -77,16 +77,36 @@ def run_selftest():
     target_item = app._refs[target]["item"]
     app.simulate_double_click(target)
     settle()
-    check("双击弹出便签", app.note_win is not None)
+    check("双击弹出便签", bool(app.notes))
 
-    if app.note_win is not None:
-        app.note_text.insert("1.0", "自检写入的备注")
+    state = app.notes.get(target_item["id"])
+    if state is not None:
+        state["text"].insert("1.0", "自检写入的备注")
     time.sleep(0.45)  # 越过"刚打开不关"的保护
     app.simulate_click(second_leaf)
     settle()
     note_text = target_item.get("note")
-    closed = app.note_win is None
+    closed = not app.notes
     check("点别处关闭便签并保存内容", closed and note_text == "自检写入的备注")
+
+    # 钉在桌面上的便签: 点别处不会被收走
+    app.simulate_double_click(target)
+    settle()
+    state = app.notes.get(target_item["id"])
+    pinned_ok = False
+    keep_ok = False
+    if state is not None:
+        app.toggle_note_pin(state)
+        pinned_ok = bool(target_item.get("note_pinned"))
+        settle()
+        time.sleep(0.45)
+        app.simulate_click(second_leaf)
+        settle()
+        keep_ok = bool(app.notes)
+        app.close_note()
+        settle()
+    check("便签可以钉在桌面上", pinned_ok)
+    check("钉住的便签不会点别处就消失", keep_ok)
 
     state_before = target_item["done"]
     app.simulate_click(target, on_box=True)

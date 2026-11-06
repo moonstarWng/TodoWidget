@@ -38,7 +38,7 @@ class ListMenuMixin:
         if list_id == self.store.current:
             return
         self.finish_edit()
-        self.close_note()
+        self.close_note(keep_pinned=True)
         self.store.select(list_id)
         self.store.save()
         self.refresh()
@@ -78,7 +78,7 @@ class ListMenuMixin:
             pass
         if not confirmed:
             return
-        self.close_note()
+        self.close_note(keep_pinned=True)
         self.store.delete_list(self.store.current)
         self.store.save()
         self.refresh()

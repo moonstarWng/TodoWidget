@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS items (
     position     INTEGER NOT NULL DEFAULT 0,
     open         INTEGER NOT NULL DEFAULT 1,
     pinned       INTEGER NOT NULL DEFAULT 0,
+    note_pinned  INTEGER NOT NULL DEFAULT 0,
+    note_pos     TEXT,
     created_at   TEXT,
     completed_at TEXT
 );
@@ -130,6 +132,14 @@ class Store:
             self.current = self.lists[0]["id"]
         return True
 
+    def find_item(self, item_id):
+        """按 id 在所有清单里找任务节点"""
+        for lst in self.lists:
+            for it, _ in walk(lst["items"]):
+                if it["id"] == item_id:
+                    return it
+        return None
+
     # ---------------- 数据库 ----------------
     def connect(self):
         """打开(必要时建表)数据库"""
@@ -155,6 +165,11 @@ class Store:
         if "pinned" not in names:
             self.conn.execute(
                 "ALTER TABLE items ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        if "note_pinned" not in names:
+            self.conn.execute(
+                "ALTER TABLE items ADD COLUMN note_pinned INTEGER NOT NULL DEFAULT 0")
+        if "note_pos" not in names:
+            self.conn.execute("ALTER TABLE items ADD COLUMN note_pos TEXT")
 
     def close(self):
         if self.conn is not None:
@@ -189,8 +204,8 @@ class Store:
         self.lists = []
         items = self.conn.execute(
             "SELECT id, list_id, parent_id, text, done, note, position, open,"
-            " created_at, completed_at, pinned FROM items"
-            " ORDER BY position, rowid").fetchall()
+            " created_at, completed_at, pinned, note_pinned, note_pos"
+            " FROM items ORDER BY position, rowid").fetchall()
 
         by_id = {}
         roots = {}
@@ -201,12 +216,15 @@ class Store:
 
         for row in items:
             (iid, list_id, parent_id, text, done, note, position, is_open,
-             created_at, completed_at, pinned) = row
+             created_at, completed_at, pinned, note_pinned, note_pos) = row
             node = {"id": iid, "text": text or "", "done": bool(done),
                     "children": [], "open": bool(is_open),
                     "pinned": bool(pinned),
+                    "note_pinned": bool(note_pinned),
                     "created_at": created_at or now_str(),
                     "completed_at": completed_at}
+            if note_pos:
+                node["note_pos"] = note_pos
             if note:
                 node["note"] = note
             by_id[iid] = node
@@ -260,14 +278,17 @@ class Store:
         for pos, it in enumerate(items):
             conn.execute(
                 "INSERT INTO items(id, list_id, parent_id, text, done, note,"
-                " position, open, created_at, completed_at, pinned)"
-                " VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                " position, open, created_at, completed_at, pinned,"
+                " note_pinned, note_pos)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (it["id"], list_id, parent_id, it.get("text") or "",
                  1 if it.get("done") else 0, it.get("note") or "",
                  pos, 1 if it.get("open", True) else 0,
                  it.get("created_at") or now_str(),
                  it.get("completed_at"),
-                 1 if it.get("pinned") else 0))
+                 1 if it.get("pinned") else 0,
+                 1 if it.get("note_pinned") else 0,
+                 it.get("note_pos") or ""))
             self._save_items(conn, list_id, it["id"],
                              it.get("children") or [])
 
@@ -309,6 +330,7 @@ class Store:
             it["children"] = self._upgrade_items(it.get("children") or [])
             it.setdefault("open", True)
             it.setdefault("pinned", False)
+            it.setdefault("note_pinned", False)
             out.append(it)
         return out
 
