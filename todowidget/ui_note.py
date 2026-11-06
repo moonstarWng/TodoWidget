@@ -2,18 +2,32 @@
 """便签窗口: Markdown 预览、自动续列表、超链接识别、钉到桌面"""
 
 import ctypes
+import os
 import re
+import shutil
 import time
+import uuid
 
 import tkinter as tk
+from tkinter import filedialog
+
+try:
+    from PIL import Image, ImageGrab, ImageTk
+except Exception:  # 没装 pillow 就只是不能放图片
+    Image = None
+    ImageGrab = None
+    ImageTk = None
 
 from . import theme as T
+from .paths import APP_DIR
 from .store import walk as _walk
 from .theme import P
 from .utils import MonitorInfo, open_url
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
 LINK_TAIL = ".,;:!?)]}\u3002\uff0c\u3001\uff09\u300b"
+IMG_RE = re.compile(r"!\[\]\(([^)]+)\)")
+IMG_EXT = (".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")
 
 
 class NoteMixin:
@@ -71,7 +85,7 @@ class NoteMixin:
         state = {"id": note_id, "item": item, "win": win, "text": None,
                  "editing": True, "raw": item.get("note") or "",
                  "pinned": pinned, "link_job": None, "mode_btn": None,
-                 "pin_btn": None}
+                 "pin_btn": None, "images": []}
         self.notes[note_id] = state
 
         body = tk.Frame(win, bg=P.note_bg)
@@ -115,6 +129,14 @@ class NoteMixin:
         pin_btn.bind("<Enter>", lambda ev: pin_btn.configure(fg=P.note_fg))
         pin_btn.bind("<Leave>", lambda ev: pin_btn.configure(fg=P.note_dim))
         state["pin_btn"] = pin_btn
+
+        img_btn = tk.Label(head, text="\U0001F5BC", bg=P.note_head,
+                           fg=P.note_dim, font=self.f_small,
+                           cursor="hand2", padx=6)
+        img_btn.pack(side="right")
+        img_btn.bind("<Button-1>", lambda ev, s=state: self.pick_note_image(s))
+        img_btn.bind("<Enter>", lambda ev: img_btn.configure(fg=P.note_fg))
+        img_btn.bind("<Leave>", lambda ev: img_btn.configure(fg=P.note_dim))
 
         hint = tk.Label(body, text="# 标题 · - 列表 · 1. 编号 · **加粗** · 网址可点",
                         bg=P.note_bg, fg=P.note_dim, font=self.f_small, anchor="w")
@@ -173,21 +195,83 @@ class NoteMixin:
         text.bind("<Escape>", lambda ev, s=state: self.close_note(s["id"]))
         text.bind("<Return>", self.note_on_return)
         text.bind("<KeyRelease>", self.note_schedule_links)
+        text.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
 
-        width, height = 400, 320
+        self.make_note_grips(win, state)
+
+        width, height = self.parse_note_size(item.get("note_size"))
         pos = self.parse_note_pos(item.get("note_pos"))
         if pos is None:
             pos = self.screen_center(width, height)
         win.geometry("{}x{}+{}+{}".format(width, height, pos[0], pos[1]))
         win.lift()
-        text.focus_set()
         self._note_opened_at = time.time()
         self.update_note_pin_button(state)
+
+        if state["raw"].strip():
+            # 有内容的便签默认直接看预览, 想看编辑再点
+            self.note_toggle_mode(state)
+        else:
+            text.focus_set()
 
         if not restore:
             self.root.after(30, lambda s=state: self.note_mark_links(s))
         if pinned:
             win.after(60, lambda w=win: w.lift())
+
+    # ---------------- 拖动宽高 ----------------
+    def make_note_grips(self, win, state):
+        """无边框窗口自己实现右下角/右边/下边的拉伸"""
+        grip_color = P.note_edge
+
+        right = tk.Frame(win, bg=grip_color, cursor="sb_h_double_arrow")
+        right.place(relx=1.0, x=-4, y=0, relheight=1.0, width=4)
+        bottom = tk.Frame(win, bg=grip_color, cursor="sb_v_double_arrow")
+        bottom.place(relx=0, rely=1.0, y=-4, relwidth=1.0, height=4)
+        corner = tk.Frame(win, bg=grip_color, cursor="sizing")
+        corner.place(relx=1.0, rely=1.0, x=-14, y=-14, width=14, height=14)
+
+        for widget, mode in ((right, "e"), (bottom, "s"), (corner, "se")):
+            widget.bind("<Button-1>",
+                        lambda ev, m=mode: self.start_note_resize(state, ev, m))
+            widget.bind("<B1-Motion>",
+                        lambda ev: self.do_note_resize(state, ev))
+            widget.bind("<ButtonRelease-1>",
+                        lambda ev: self.end_note_resize(state))
+
+    def start_note_resize(self, state, event, mode):
+        win = state["win"]
+        state["resize"] = {"mode": mode, "x": event.x_root, "y": event.y_root,
+                           "w": win.winfo_width(), "h": win.winfo_height()}
+
+    def do_note_resize(self, state, event):
+        info = state.get("resize")
+        if not info:
+            return
+        win = state["win"]
+        dx = event.x_root - info["x"]
+        dy = event.y_root - info["y"]
+        width = info["w"]
+        height = info["h"]
+        if info["mode"] in ("e", "se"):
+            width = max(280, info["w"] + dx)
+        if info["mode"] in ("s", "se"):
+            height = max(180, info["h"] + dy)
+        win.geometry("{}x{}".format(width, height))
+
+    def end_note_resize(self, state):
+        state["resize"] = None
+        self.save_note_geom(state)
+
+    def parse_note_size(self, value):
+        """'420x300' -> (420, 300)"""
+        if not value:
+            return 400, 320
+        try:
+            width, height = str(value).split("x")
+            return max(280, int(width)), max(180, int(height))
+        except Exception:
+            return 400, 320
 
     # ---------------- 钉在最前面 ----------------
     def toggle_note_pin(self, state):
@@ -228,16 +312,122 @@ class NoteMixin:
             return None
 
     def save_note_pos(self, state):
-        """记住便签位置, 下次还开在这儿"""
+        """记住便签位置和大小, 下次还开在这儿"""
+        self.save_note_geom(state)
+
+    def save_note_geom(self, state):
         win = state.get("win")
         if win is None:
             return
         try:
-            state["item"]["note_pos"] = "{},{}".format(win.winfo_x(),
-                                                       win.winfo_y())
+            item = state["item"]
+            item["note_pos"] = "{},{}".format(win.winfo_x(), win.winfo_y())
+            item["note_size"] = "{}x{}".format(win.winfo_width(),
+                                               win.winfo_height())
             self.store.save()
         except Exception:
             pass
+
+    # ---------------- 图片 ----------------
+    def pick_note_image(self, state):
+        """选一张本地图片放进便签"""
+        patterns = " ".join("*" + ext for ext in IMG_EXT)
+        path = filedialog.askopenfilename(
+            parent=state["win"], title="选择图片",
+            filetypes=[("图片", patterns), ("所有文件", "*.*")])
+        if not path:
+            return
+        self.add_image_file(state, path)
+
+    def add_image_file(self, state, source):
+        """把图片复制到 note_images 目录, 再插入引用"""
+        try:
+            folder = os.path.join(APP_DIR, "note_images")
+            if not os.path.isdir(folder):
+                os.makedirs(folder, exist_ok=True)
+            ext = os.path.splitext(source)[1].lower()
+            if ext not in IMG_EXT:
+                ext = ".png"
+            name = uuid.uuid4().hex[:12] + ext
+            shutil.copyfile(source, os.path.join(folder, name))
+        except Exception:
+            return
+        self.insert_image_token(state, name)
+
+    def add_image_bitmap(self, state, image):
+        """把剪贴板里的位图存成文件再插入"""
+        try:
+            folder = os.path.join(APP_DIR, "note_images")
+            if not os.path.isdir(folder):
+                os.makedirs(folder, exist_ok=True)
+            name = uuid.uuid4().hex[:12] + ".png"
+            image.save(os.path.join(folder, name), "PNG")
+        except Exception:
+            return
+        self.insert_image_token(state, name)
+
+    def insert_image_token(self, state, name):
+        """在光标处插入一段图片引用 (预览时会变成真图)"""
+        if not state["editing"]:
+            self.note_toggle_mode(state)
+        token = "![]({})".format(os.path.join("note_images", name))
+        widget = state["text"]
+        widget.insert("insert", "\n" + token + "\n")
+        widget.see("insert")
+        self.note_mark_links(state)
+
+    def paste_into_note(self, state):
+        """Ctrl+V: 剪贴板是图片就贴图, 否则走正常粘贴"""
+        if ImageGrab is None:
+            return None
+        data = None
+        try:
+            data = ImageGrab.grabclipboard()
+        except Exception:
+            data = None
+        if data is None:
+            return None
+        if isinstance(data, list):
+            for path in data:
+                if str(path).lower().endswith(IMG_EXT):
+                    self.add_image_file(state, str(path))
+                    return "break"
+            return None
+        self.add_image_bitmap(state, data)
+        return "break"
+
+    def resolve_image_path(self, path):
+        """图片路径: 绝对路径或相对项目目录"""
+        if os.path.isabs(path) and os.path.exists(path):
+            return path
+        full = os.path.join(APP_DIR, path)
+        if os.path.exists(full):
+            return full
+        return None
+
+    def insert_note_image(self, widget, path):
+        """在预览里把 ![](xxx) 画成真图"""
+        state = self.note_by_widget.get(widget)
+        if Image is None or state is None:
+            widget.insert("end", "![]({})".format(path))
+            return
+        full = self.resolve_image_path(path)
+        if not full:
+            widget.insert("end", "\uff08\u56fe\u7247\u4e22\u4e86\uff09")
+            return
+        try:
+            image = Image.open(full)
+            max_width = max(200, state["win"].winfo_width() - 60)
+            if image.width > max_width:
+                ratio = max_width / float(image.width)
+                size = (int(image.width * ratio), int(image.height * ratio))
+                image = image.resize(size)
+            photo = ImageTk.PhotoImage(image)
+        except Exception:
+            widget.insert("end", "\uff08\u56fe\u7247\u6253\u4e0d\u5f00\uff09")
+            return
+        state["images"].append(photo)
+        widget.image_create("end", image=photo, padx=2, pady=3)
 
     # ---------------- 编辑 / 预览 ----------------
     def note_state_of(self, widget):
@@ -411,10 +601,14 @@ class NoteMixin:
         widget.insert("end", "\n")
 
     def note_insert_inline(self, widget, text):
-        """处理 **加粗** 和 `代码`"""
-        parts = re.split(r"(\*\*.+?\*\*|`[^`]+`)", text)
+        """处理 **加粗**、`代码` 和图片引用"""
+        parts = re.split(r"(\*\*.+?\*\*|`[^`]+`|!\[\]\([^)]+\))", text)
         for part in parts:
             if not part:
+                continue
+            image = IMG_RE.match(part)
+            if image:
+                self.insert_note_image(widget, image.group(1))
                 continue
             start = widget.index("end-1c")
             if part.startswith("**") and part.endswith("**") and len(part) > 4:

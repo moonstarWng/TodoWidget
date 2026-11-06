@@ -7,6 +7,9 @@ dist/
 __pycache__/
 *.py[cod]
 
+# 便签图片
+note_images/
+
 # 本机配置与私有数据, 不进仓库
 todo_config.json
 todo_data.db
