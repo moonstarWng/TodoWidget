@@ -12,12 +12,14 @@ import uuid
 from datetime import datetime
 
 from .paths import DATA_FILE, DB_FILE
+from .theme import LIST_COLORS
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS lists (
     id       TEXT PRIMARY KEY,
     name     TEXT NOT NULL,
-    position INTEGER NOT NULL DEFAULT 0
+    position INTEGER NOT NULL DEFAULT 0,
+    color    TEXT
 );
 CREATE TABLE IF NOT EXISTS items (
     id           TEXT PRIMARY KEY,
@@ -104,7 +106,9 @@ class Store:
 
     def add_list(self, name):
         clean = (name or "").strip() or "新清单"
-        lst = {"id": uuid.uuid4().hex[:8], "name": clean, "items": []}
+        color = LIST_COLORS[len(self.lists) % len(LIST_COLORS)]
+        lst = {"id": uuid.uuid4().hex[:8], "name": clean, "color": color,
+               "items": []}
         self.lists.append(lst)
         self.current = lst["id"]
         return lst
@@ -173,6 +177,13 @@ class Store:
             self.conn.execute("ALTER TABLE items ADD COLUMN note_pos TEXT")
         if "note_size" not in names:
             self.conn.execute("ALTER TABLE items ADD COLUMN note_size TEXT")
+        try:
+            list_cols = [row[1] for row in self.conn.execute(
+                "PRAGMA table_info(lists)").fetchall()]
+            if "color" not in list_cols:
+                self.conn.execute("ALTER TABLE lists ADD COLUMN color TEXT")
+        except Exception:
+            pass
 
     def close(self):
         if self.conn is not None:
@@ -182,13 +193,23 @@ class Store:
                 pass
             self.conn = None
 
+    def ensure_list_colors(self):
+        """老库或新建的清单补上自动配色"""
+        for index, lst in enumerate(self.lists):
+            if not lst.get("color"):
+                lst["color"] = LIST_COLORS[index % len(LIST_COLORS)]
+
     def load(self):
+        self._load()
+        self.ensure_list_colors()
+
+    def _load(self):
         """优先读库; 没有库就看有没有老 JSON, 再没有就给一份示例"""
         had_db = os.path.exists(self.path)
         self.connect()
 
         rows = self.conn.execute(
-            "SELECT id, name FROM lists ORDER BY position").fetchall()
+            "SELECT id, name, color FROM lists ORDER BY position").fetchall()
         if rows:
             self._load_rows(rows)
             return
@@ -213,8 +234,11 @@ class Store:
 
         by_id = {}
         roots = {}
-        for list_id, name in list_rows:
-            node = {"id": list_id, "name": name, "items": []}
+        for index, row in enumerate(list_rows):
+            list_id, name, color = row[0], row[1], row[2]
+            if not color:
+                color = LIST_COLORS[index % len(LIST_COLORS)]
+            node = {"id": list_id, "name": name, "color": color, "items": []}
             self.lists.append(node)
             roots[list_id] = node["items"]
 
@@ -275,8 +299,9 @@ class Store:
             conn.execute("DELETE FROM items")
             conn.execute("DELETE FROM lists")
             for pos, lst in enumerate(self.lists):
-                conn.execute("INSERT INTO lists(id, name, position)"
-                             " VALUES(?, ?, ?)", (lst["id"], lst["name"], pos))
+                conn.execute("INSERT INTO lists(id, name, position, color)"
+                             " VALUES(?, ?, ?, ?)",
+                             (lst["id"], lst["name"], pos, lst.get("color")))
                 self._save_items(conn, lst["id"], None, lst["items"])
             conn.execute("INSERT OR REPLACE INTO meta(key, value)"
                          " VALUES('current', ?)", (self.current,))

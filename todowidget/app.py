@@ -16,6 +16,7 @@ except Exception:
 
 from .paths import CONF_FILE
 from .store import Store
+from . import theme as T
 from .theme import P, hex_to_rgb, pick_font, set_theme, use_paper
 from .utils import HAS_TRAY, enable_acrylic, make_icon, place_window
 
@@ -148,9 +149,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         head.pack_propagate(False)
         self._head = head
 
+        self.list_dot = tk.Canvas(head, width=10, height=10, bg=P.head,
+                                  highlightthickness=0, bd=0)
+        self.list_dot.pack(side="left", padx=(14, 2), pady=(2, 0))
         self.lbl_title = tk.Label(head, text="待办", bg=P.head, fg=P.fg,
                                   font=self.f_title, cursor="hand2")
-        self.lbl_title.pack(side="left", padx=(14, 8))
+        self.lbl_title.pack(side="left", padx=(0, 8))
         self.lbl_stat = tk.Label(head, text="", bg=P.head, fg=P.fg_dim,
                                  font=self.f_small)
         self.lbl_stat.pack(side="left", pady=(3, 0))
@@ -198,6 +202,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.tab_bars[key] = bar
 
         def start_drag(e):
+            if self.texture == "glass":
+                enable_acrylic(self.root, state=0)  # 拖动时先关模糊, 不然卡
             self._drag_from = (e.x_root, e.y_root)
             self._drag = (e.x_root - r.winfo_x(), e.y_root - r.winfo_y())
             self._drag_moved = False
@@ -213,6 +219,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                                        e.y_root - self._drag[1]))
 
         def end_drag(e, as_click=False):
+            if self.texture == "glass":
+                self.root.after(120, lambda: enable_acrylic(self.root))
             moved = getattr(self, "_drag_moved", False)
             self._drag = None
             self._drag_moved = False
@@ -392,15 +400,19 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def update_tabs(self, done, total):
         try:
             self.tab_labels["pending"].config(
-                text="未完成 {}".format(total - done),
-                fg=P.fg if self.tab == "pending" else P.fg_dim)
+                text="未完成 {}".format(total - done))
             self.tab_labels["done"].config(
-                text="已完成 {}".format(done),
-                fg=P.fg if self.tab == "done" else P.fg_dim)
+                text="已完成 {}".format(done))
+            pending_color = P.accent
+            done_color = T.TAB_COLORS.get("done") or P.accent
+            self.tab_labels["pending"].config(
+                fg=pending_color if self.tab == "pending" else P.fg_dim)
+            self.tab_labels["done"].config(
+                fg=done_color if self.tab == "done" else P.fg_dim)
             self.tab_bars["pending"].config(
-                bg=P.accent if self.tab == "pending" else P.bg)
+                bg=pending_color if self.tab == "pending" else P.bg)
             self.tab_bars["done"].config(
-                bg=P.accent if self.tab == "done" else P.bg)
+                bg=done_color if self.tab == "done" else P.bg)
         except Exception:
             pass
 

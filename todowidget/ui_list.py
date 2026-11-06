@@ -67,6 +67,13 @@ class ListViewMixin:
         if len(name) > 10:
             name = name[:9] + "\u2026"
         self.lbl_title.config(text=name + "  \u25be")
+        try:
+            current = self.store.current_list()
+            color = (current or {}).get("color") or P.accent
+            self.list_dot.delete("all")
+            self.list_dot.create_oval(2, 2, 9, 9, fill=color, outline="")
+        except Exception:
+            pass
         open_state = {}
         if sync_open:
             for iid in self._refs:

@@ -94,7 +94,7 @@ class WindowCompositionAttributeData(ctypes.Structure):
                 ("SizeOfData", ctypes.c_size_t)]
 
 
-def enable_acrylic(window, tint=(24, 26, 32, 205)):
+def enable_acrylic(window, tint=(24, 26, 32, 205), state=4):
     """打开 Windows 亚克力/磨砂效果 (Win10 1803+ 才有, 失败就算了)"""
     try:
         user32 = ctypes.windll.user32
@@ -102,7 +102,7 @@ def enable_acrylic(window, tint=(24, 26, 32, 205)):
         if not hwnd:
             hwnd = window.winfo_id()
         accent = AccentPolicy()
-        accent.AccentState = 4        # ACCENT_ENABLE_ACRYLICBLURBEHIND
+        accent.AccentState = state    # 4=亚克力模糊, 0=关闭
         accent.AccentFlags = 2        # 让整个窗口都吃这个效果
         red, green, blue, alpha = tint
         accent.GradientColor = ((alpha << 24) | (blue << 16) | (green << 8) | red)

@@ -4,21 +4,46 @@
 import tkinter as tk
 from tkinter import messagebox
 
+try:
+    from PIL import Image, ImageDraw, ImageTk
+except Exception:
+    Image = None
+
 from . import theme as T
-from .theme import P, best_text_color
+from .theme import P, best_text_color, hex_to_rgb
 from .utils import round_corners
 
 class ListMenuMixin:
+    def make_dot_image(self, color, size=10):
+        """菜单里清单前面那个彩色小圆点"""
+        if Image is None:
+            return None
+        try:
+            image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.ellipse([1, 1, size - 2, size - 2], fill=hex_to_rgb(color))
+            photo = ImageTk.PhotoImage(image)
+        except Exception:
+            return None
+        self._menu_dots.append(photo)
+        return photo
+
     def build_list_menu(self):
         menu = tk.Menu(self.root, tearoff=0)
+        self._menu_dots = []
         for lst in self.store.lists:
             label = lst["name"]
             if lst["id"] == self.store.current:
                 label = "\u2713  " + label
             else:
                 label = "    " + label
-            menu.add_command(label=label,
-                             command=lambda lid=lst["id"]: self.switch_list(lid))
+            dot = self.make_dot_image(lst.get("color") or P.accent)
+            if dot is not None:
+                menu.add_command(label=label, image=dot, compound="left",
+                                 command=lambda lid=lst["id"]: self.switch_list(lid))
+            else:
+                menu.add_command(label=label,
+                                 command=lambda lid=lst["id"]: self.switch_list(lid))
         menu.add_separator()
         menu.add_command(label="新建清单…", command=self.new_list)
         menu.add_command(label="重命名当前清单…", command=self.rename_list)

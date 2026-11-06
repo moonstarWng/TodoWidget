@@ -66,6 +66,10 @@ THEMES = {
 THEME_NAMES = (("dark", "深色"), ("light", "浅色"),
                ("forest", "墨绿"), ("sand", "暖沙"))
 
+LIST_COLORS = ("#5b9cff", "#43c08a", "#e0a458", "#c86bd8",
+               "#e06b6b", "#3fb8cc")
+TAB_COLORS = {"pending": None, "done": "#43c08a"}
+
 TEXTURE_NAMES = (("solid", "纯色"), ("paper", "纸质"), ("glass", "磨砂"))
 
 # 纸质质感: 暖米色, 不管当前主题是什么都用这套
