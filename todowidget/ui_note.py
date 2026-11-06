@@ -283,7 +283,7 @@ class NoteMixin:
         return "break" if self.open_image_token(token) else None
 
     def show_image_preview(self, path):
-        """大图查看窗口: 点一下或按 Esc 关掉"""
+        """大图查看: 底下带一条可以拖动/关闭的条"""
         if Image is None or ImageTk is None:
             return
         full = self.resolve_image_path(path)
@@ -291,38 +291,75 @@ class NoteMixin:
             return
         try:
             image = Image.open(full)
+            orig_w, orig_h = image.size
         except Exception:
             return
 
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
-        width = image.width
-        height = image.height
+        width, height = orig_w, orig_h
         limit_w = int(screen_w * 0.8)
-        limit_h = int(screen_h * 0.8)
+        limit_h = int((screen_h - 80) * 0.8)
         if width > limit_w or height > limit_h:
             ratio = min(limit_w / float(width), limit_h / float(height))
             width = int(width * ratio)
             height = int(height * ratio)
             image = image.resize((max(1, width), max(1, height)))
 
+        bar_h = 34
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg="#0f1014")
+        win.configure(bg="#2a2d36", padx=1, pady=1)
+
+        body = tk.Frame(win, bg="#0f1014")
+        body.pack(fill="both", expand=True)
+
         photo = ImageTk.PhotoImage(image)
-        label = tk.Label(win, image=photo, bg="#0f1014", bd=0,
+        label = tk.Label(body, image=photo, bg="#0f1014", bd=0,
                          highlightthickness=0)
         label.image = photo
         label.pack(fill="both", expand=True)
 
+        bar = tk.Frame(body, bg="#1b1d24", height=bar_h, cursor="fleur")
+        bar.pack(fill="x", side="bottom")
+        bar.pack_propagate(False)
+
+        name = os.path.basename(path)
+        if len(name) > 28:
+            name = name[:25] + "\u2026"
+        info = tk.Label(bar, text="{} \u00d7 {}   {}".format(orig_w, orig_h, name),
+                        bg="#1b1d24", fg="#9aa0ad", font=self.f_small,
+                        anchor="w")
+        info.pack(side="left", padx=10)
+
+        close_btn = tk.Label(bar, text="\u2715", bg="#1b1d24", fg="#9aa0ad",
+                             font=self.f_item, width=3, cursor="hand2")
+        close_btn.pack(side="right", padx=4)
+        close_btn.bind("<Button-1>", lambda ev, w=win: w.destroy())
+        close_btn.bind("<Enter>", lambda ev: close_btn.configure(fg="#ffffff"))
+        close_btn.bind("<Leave>", lambda ev: close_btn.configure(fg="#9aa0ad"))
+
+        drag = {"dx": 0, "dy": 0}
+
+        def start_move(ev, w=win):
+            drag["dx"] = ev.x_root - w.winfo_x()
+            drag["dy"] = ev.y_root - w.winfo_y()
+
+        def do_move(ev, w=win):
+            w.geometry("+{}+{}".format(ev.x_root - drag["dx"],
+                                       ev.y_root - drag["dy"]))
+
+        for widget in (label, bar, info):
+            widget.bind("<Button-1>", start_move)
+            widget.bind("<B1-Motion>", do_move)
+
         x = (screen_w - width) // 2
-        y = (screen_h - height) // 2
-        win.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        y = (screen_h - height - bar_h) // 2
+        win.geometry("{}x{}+{}+{}".format(width, height + bar_h, x, y))
         win.after(30, lambda w=win: round_corners(w, 10))
-        for widget in (win, label):
-            widget.bind("<Button-1>", lambda ev, w=win: w.destroy())
         win.bind("<Escape>", lambda ev, w=win: w.destroy())
+        win.after(400, lambda w=win: w.bind("<FocusOut>", lambda ev: w.destroy()))
         win.lift()
 
     def make_note_grips(self, win, state):
