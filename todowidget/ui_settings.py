@@ -5,7 +5,7 @@ import tkinter as tk
 from tkinter import colorchooser
 
 from .theme import P, THEMES, THEME_NAMES, best_text_color, set_theme
-from .utils import make_icon
+from .utils import make_icon, round_corners
 
 class SettingsMixin:
     def open_settings(self, pos=None):
@@ -91,6 +91,7 @@ class SettingsMixin:
         else:
             x, y = pos
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        win.after(30, lambda w=win: round_corners(w, 12))
         win.lift()
 
     def make_sort_chip(self, parent, key, label):

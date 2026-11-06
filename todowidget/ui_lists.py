@@ -6,6 +6,7 @@ from tkinter import messagebox
 
 from . import theme as T
 from .theme import P, best_text_color
+from .utils import round_corners
 
 class ListMenuMixin:
     def build_list_menu(self):
@@ -152,6 +153,7 @@ class ListMenuMixin:
         base_x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
         base_y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
         win.geometry("{}x{}+{}+{}".format(width, height, base_x, base_y))
+        win.after(30, lambda w=win: round_corners(w, 12))
         win.lift()
         entry.focus_set()
 

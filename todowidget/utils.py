@@ -76,6 +76,24 @@ def send_to_bottom(window):
     except Exception:
         return False
 
+
+def round_corners(window, radius=12):
+    """给无边框窗口切圆角"""
+    try:
+        user32 = ctypes.windll.user32
+        gdi32 = ctypes.windll.gdi32
+        hwnd = user32.GetParent(window.winfo_id())
+        if not hwnd:
+            hwnd = window.winfo_id()
+        width = max(2, window.winfo_width())
+        height = max(2, window.winfo_height())
+        region = gdi32.CreateRoundRectRgn(0, 0, width + 1, height + 1,
+                                          radius * 2, radius * 2)
+        user32.SetWindowRgn(hwnd, region, True)
+        return True
+    except Exception:
+        return False
+
 class FakeEvent:
     """测试用的事件对象, 字段和 Tk 事件保持一致"""
 

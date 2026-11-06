@@ -540,12 +540,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
 
+    def raise_notes(self):
+        """让便签始终压在主窗口上面"""
+        for state in self.notes.values():
+            try:
+                state["win"].lift()
+            except Exception:
+                pass
+
     def grab_focus(self, e):
         # 正在改名时点输入框自己, 别把焦点抢走
         if self._editor is not None and e.widget is self._editor:
             return
         try:
             self.root.focus_force()
+            self.raise_notes()
         except Exception:
             pass
 
@@ -584,6 +593,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.root.lift()
         try:
             self.root.focus_force()
+            self.raise_notes()
         except Exception:
             pass
 

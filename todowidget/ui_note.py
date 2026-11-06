@@ -22,7 +22,7 @@ from . import theme as T
 from .paths import APP_DIR
 from .store import walk as _walk
 from .theme import P
-from .utils import MonitorInfo, open_url
+from .utils import MonitorInfo, open_url, round_corners
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
 LINK_TAIL = ".,;:!?)]}\u3002\uff0c\u3001\uff09\u300b"
@@ -195,6 +195,8 @@ class NoteMixin:
         text.bind("<KeyRelease>", self.note_schedule_links)
         text.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
         win.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
+        text.bind("<Double-Button-1>", self.note_image_double_click)
+        win.bind("<Configure>", lambda ev, s=state: self.round_note(s))
 
         self.make_note_grips(win, state)
 
@@ -204,6 +206,7 @@ class NoteMixin:
             pos = self.screen_center(width, height)
         win.geometry("{}x{}+{}+{}".format(width, height, pos[0], pos[1]))
         win.lift()
+        win.after(30, lambda w=win: round_corners(w, 14))
         self._note_opened_at = time.time()
         self.update_note_pin_button(state)
 
@@ -224,6 +227,83 @@ class NoteMixin:
             win.after(60, lambda w=win: w.lift())
 
     # ---------------- 拖动宽高 ----------------
+    def round_note(self, state):
+        """改完大小重新切圆角"""
+        win = state.get("win")
+        if win is None:
+            return
+        job = state.get("round_job")
+        if job is not None:
+            try:
+                win.after_cancel(job)
+            except Exception:
+                pass
+        state["round_job"] = win.after(60, lambda w=win: round_corners(w, 14))
+
+    def note_image_double_click(self, event):
+        """双击图片放大查看"""
+        widget = event.widget
+        index = widget.index("@{},{}".format(event.x, event.y))
+        try:
+            chunks = widget.dump(index, index + " +1c", text=False,
+                                 image=True, mark=False, tag=False, window=False)
+        except Exception:
+            return None
+        if not chunks or chunks[0][0] != "image":
+            return None
+        state = self.note_state_of(widget)
+        if state is None:
+            return None
+        token = state["image_map"].get(chunks[0][1])
+        match = IMG_RE.match(token or "")
+        if not match:
+            return "break"
+        self.show_image_preview(match.group(1))
+        return "break"
+
+    def show_image_preview(self, path):
+        """大图查看窗口: 点一下或按 Esc 关掉"""
+        if Image is None or ImageTk is None:
+            return
+        full = self.resolve_image_path(path)
+        if not full:
+            return
+        try:
+            image = Image.open(full)
+        except Exception:
+            return
+
+        screen_w = self.root.winfo_screenwidth()
+        screen_h = self.root.winfo_screenheight()
+        width = image.width
+        height = image.height
+        limit_w = int(screen_w * 0.8)
+        limit_h = int(screen_h * 0.8)
+        if width > limit_w or height > limit_h:
+            ratio = min(limit_w / float(width), limit_h / float(height))
+            width = int(width * ratio)
+            height = int(height * ratio)
+            image = image.resize((max(1, width), max(1, height)))
+
+        win = tk.Toplevel(self.root)
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg="#0f1014")
+        photo = ImageTk.PhotoImage(image)
+        label = tk.Label(win, image=photo, bg="#0f1014", bd=0,
+                         highlightthickness=0)
+        label.image = photo
+        label.pack(fill="both", expand=True)
+
+        x = (screen_w - width) // 2
+        y = (screen_h - height) // 2
+        win.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        win.after(30, lambda w=win: round_corners(w, 10))
+        for widget in (win, label):
+            widget.bind("<Button-1>", lambda ev, w=win: w.destroy())
+        win.bind("<Escape>", lambda ev, w=win: w.destroy())
+        win.lift()
+
     def make_note_grips(self, win, state):
         """无边框窗口自己实现右下角/右边/下边的拉伸"""
         grip_color = P.note_edge
