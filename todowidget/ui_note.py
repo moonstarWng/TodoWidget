@@ -196,6 +196,7 @@ class NoteMixin:
         text.bind("<Return>", self.note_on_return)
         text.bind("<KeyRelease>", self.note_schedule_links)
         text.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
+        win.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
 
         self.make_note_grips(win, state)
 
@@ -211,8 +212,13 @@ class NoteMixin:
         if state["raw"].strip():
             # 有内容的便签默认直接看预览, 想看编辑再点
             self.note_toggle_mode(state)
-        else:
-            text.focus_set()
+        # 不管哪种模式都让输入框拿到焦点, Ctrl+V 才收得到
+        if not restore:
+            try:
+                win.focus_force()
+            except Exception:
+                pass
+        text.focus_set()
 
         if not restore:
             self.root.after(30, lambda s=state: self.note_mark_links(s))
@@ -370,7 +376,7 @@ class NoteMixin:
         """在光标处插入一段图片引用 (预览时会变成真图)"""
         if not state["editing"]:
             self.note_toggle_mode(state)
-        token = "![]({})".format(os.path.join("note_images", name))
+        token = "![]({})".format("note_images/" + name)
         widget = state["text"]
         widget.insert("insert", "\n" + token + "\n")
         widget.see("insert")
@@ -400,7 +406,7 @@ class NoteMixin:
         """图片路径: 绝对路径或相对项目目录"""
         if os.path.isabs(path) and os.path.exists(path):
             return path
-        full = os.path.join(APP_DIR, path)
+        full = os.path.join(APP_DIR, path.replace("/", os.sep))
         if os.path.exists(full):
             return full
         return None
