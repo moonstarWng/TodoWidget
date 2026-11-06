@@ -224,7 +224,7 @@ class NoteMixin:
                 pass
         text.focus_set()
 
-        if not restore:
+        if not restore and state["editing"]:
             self.root.after(30, lambda s=state: self.note_mark_links(s))
         if pinned:
             win.after(60, lambda w=win: w.lift())
@@ -283,9 +283,10 @@ class NoteMixin:
         return "break" if self.open_image_token(token) else None
 
     def show_image_preview(self, path):
-        """大图查看: 底下带一条可以拖动/关闭的条"""
+        """大图查看: 图片外面套一个外框, 可拖动可关闭"""
         if Image is None or ImageTk is None:
             return
+        self.close_image_view()
         full = self.resolve_image_path(path)
         if not full:
             return
@@ -306,39 +307,28 @@ class NoteMixin:
             height = int(height * ratio)
             image = image.resize((max(1, width), max(1, height)))
 
-        bar_h = 34
+        pad = 16
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg="#2a2d36", padx=1, pady=1)
+        win.configure(bg="#2b2f3a", padx=1, pady=1)
+        self.image_view = win
 
-        body = tk.Frame(win, bg="#0f1014")
-        body.pack(fill="both", expand=True)
+        panel = tk.Frame(win, bg="#171a21")
+        panel.pack(fill="both", expand=True)
 
         photo = ImageTk.PhotoImage(image)
-        label = tk.Label(body, image=photo, bg="#0f1014", bd=0,
+        label = tk.Label(panel, image=photo, bg="#171a21", bd=0,
                          highlightthickness=0)
         label.image = photo
-        label.pack(fill="both", expand=True)
+        label.pack(padx=pad, pady=pad, expand=True)
 
-        bar = tk.Frame(body, bg="#1b1d24", height=bar_h, cursor="fleur")
-        bar.pack(fill="x", side="bottom")
-        bar.pack_propagate(False)
-
-        name = os.path.basename(path)
-        if len(name) > 28:
-            name = name[:25] + "\u2026"
-        info = tk.Label(bar, text="{} \u00d7 {}   {}".format(orig_w, orig_h, name),
-                        bg="#1b1d24", fg="#9aa0ad", font=self.f_small,
-                        anchor="w")
-        info.pack(side="left", padx=10)
-
-        close_btn = tk.Label(bar, text="\u2715", bg="#1b1d24", fg="#9aa0ad",
+        close_btn = tk.Label(panel, text="\u2715", bg="#171a21", fg="#8b90a0",
                              font=self.f_item, width=3, cursor="hand2")
-        close_btn.pack(side="right", padx=4)
+        close_btn.place(relx=1.0, x=-8, y=6, anchor="ne")
         close_btn.bind("<Button-1>", lambda ev, w=win: w.destroy())
         close_btn.bind("<Enter>", lambda ev: close_btn.configure(fg="#ffffff"))
-        close_btn.bind("<Leave>", lambda ev: close_btn.configure(fg="#9aa0ad"))
+        close_btn.bind("<Leave>", lambda ev: close_btn.configure(fg="#8b90a0"))
 
         drag = {"dx": 0, "dy": 0}
 
@@ -350,17 +340,29 @@ class NoteMixin:
             w.geometry("+{}+{}".format(ev.x_root - drag["dx"],
                                        ev.y_root - drag["dy"]))
 
-        for widget in (label, bar, info):
+        for widget in (label, panel, win):
             widget.bind("<Button-1>", start_move)
             widget.bind("<B1-Motion>", do_move)
 
-        x = (screen_w - width) // 2
-        y = (screen_h - height - bar_h) // 2
-        win.geometry("{}x{}+{}+{}".format(width, height + bar_h, x, y))
-        win.after(30, lambda w=win: round_corners(w, 10))
+        total_w = width + pad * 2 + 2
+        total_h = height + pad * 2 + 2
+        x = (screen_w - total_w) // 2
+        y = (screen_h - total_h) // 2
+        win.geometry("{}x{}+{}+{}".format(total_w, total_h, x, y))
+        win.after(30, lambda w=win: round_corners(w, 12))
         win.bind("<Escape>", lambda ev, w=win: w.destroy())
         win.after(400, lambda w=win: w.bind("<FocusOut>", lambda ev: w.destroy()))
         win.lift()
+
+    def close_image_view(self):
+        """关掉已经打开的看图窗口"""
+        win = getattr(self, "image_view", None)
+        self.image_view = None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
 
     def make_note_grips(self, win, state):
         """无边框窗口自己实现右下角/右边/下边的拉伸"""
@@ -715,10 +717,12 @@ class NoteMixin:
         state["link_job"] = win.after(350, lambda: self.note_mark_links(state))
 
     def note_mark_links(self, state):
-        """把文里的网址标出来, 变成可点的链接"""
+        """编辑态把文里的网址标出来(预览态是渲染时单独绑定的, 不走这里)"""
         state["link_job"] = None
         widget = state["text"]
         if widget is None:
+            return
+        if not state.get("editing", True):
             return
         try:
             widget.tag_remove("link", "1.0", "end")

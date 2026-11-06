@@ -76,7 +76,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if folded:
             self.set_folded(True)
         self.start_tray()
-        self.root.after(300, self.reopen_pinned_notes)
 
     # ---------------- 配置 ----------------
 
