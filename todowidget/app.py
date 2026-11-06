@@ -56,6 +56,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
         self.texture = self.conf.get("texture", "solid")
+        self._day_open = {}
+        self._days_collapsed = False
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
         self.settings_win = None
@@ -290,6 +292,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.tree.tag_configure("drop_" + name, **drop)
         self.tree.tag_configure("empty", font=self.f_item, foreground=P.fg_faint)
         self.tree.tag_configure("sep", font=self.f_small, foreground=P.fg_dim)
+        self.tree.tag_configure("day", font=self.f_small, foreground=P.fg_dim)
 
         self.tree.bind("<space>", lambda e: self.toggle(self.tree.focus()))
         self.tree.bind("<Double-1>", self.on_double_click)

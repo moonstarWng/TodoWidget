@@ -118,7 +118,27 @@ class ListViewMixin:
                 insert_item(iid, kid, kids)
 
         roots = self.ordered_roots()
-        if self.sort_mode == "time":
+        if self.sort_mode == "time" and self.tab == "done":
+            # 已完成页按完成日期收纳成一个个可折叠的分组
+            day_order = []
+            day_items = {}
+            for it in roots:
+                day = self.item_time(it)[:10] or "未知"
+                if day not in day_items:
+                    day_items[day] = []
+                    day_order.append(day)
+                day_items[day].append(it)
+            for day in day_order:
+                group = day_items[day]
+                group_iid = "__day__" + day
+                default_open = not getattr(self, "_days_collapsed", False)
+                is_open = self._day_open.get(day, default_open)
+                label = "  {}  ·  {}".format(self.format_day(day), len(group))
+                t.insert("", "end", iid=group_iid, tags=("day",), text=label,
+                         open=is_open)
+                for it in group:
+                    insert_item(group_iid, it, self.store.items)
+        elif self.sort_mode == "time":
             shown_day = None
             for it in roots:
                 day = self.item_time(it)[:10]
@@ -178,6 +198,9 @@ class ListViewMixin:
 
     def set_open(self, val):
         iid = self.tree.focus()
+        if iid.startswith("__day__"):
+            self._day_open[iid[len("__day__"):]] = val
+            return
         ref = self._refs.get(iid)
         if ref:
             ref["item"]["open"] = val
@@ -338,6 +361,9 @@ class ListViewMixin:
         for it, _ in walk(self.store.items):
             if it.get("children"):
                 it["open"] = not val
+        # 按日期收纳的分组跟着一起收/展开
+        self._days_collapsed = val
+        self._day_open = {}
         self.refresh(sync_open=False)
 
     def toggle_collapse_all(self):
