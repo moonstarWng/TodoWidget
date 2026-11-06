@@ -10,7 +10,7 @@ import tkinter as tk
 from . import theme as T
 from .store import walk as _walk
 from .theme import P
-from .utils import MonitorInfo, open_url, send_to_bottom
+from .utils import MonitorInfo, open_url
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
 LINK_TAIL = ".,;:!?)]}\u3002\uff0c\u3001\uff09\u300b"
@@ -65,7 +65,7 @@ class NoteMixin:
 
         win = tk.Toplevel(self.root)
         win.overrideredirect(True)
-        win.attributes("-topmost", not pinned)
+        win.attributes("-topmost", True)
         win.configure(bg=P.note_edge)
 
         state = {"id": note_id, "item": item, "win": win, "text": None,
@@ -187,11 +187,11 @@ class NoteMixin:
         if not restore:
             self.root.after(30, lambda s=state: self.note_mark_links(s))
         if pinned:
-            win.after(60, lambda w=win: send_to_bottom(w))
+            win.after(60, lambda w=win: w.lift())
 
-    # ---------------- 钉在桌面 ----------------
+    # ---------------- 钉在最前面 ----------------
     def toggle_note_pin(self, state):
-        """钉住/取消钉住: 钉住后留在桌面层, 点别处也不关"""
+        """钉住/取消钉住: 钉住的便签固定在最前面, 点别处也不关"""
         state["pinned"] = not state["pinned"]
         item = state["item"]
         item["note_pinned"] = state["pinned"]
@@ -201,13 +201,11 @@ class NoteMixin:
         self.store.save()
         self.update_note_pin_button(state)
         try:
-            state["win"].attributes("-topmost", not state["pinned"])
+            state["win"].attributes("-topmost", True)
+            if state["pinned"]:
+                state["win"].lift()
         except Exception:
             pass
-        if state["pinned"]:
-            state["win"].after(60, lambda w=state["win"]: send_to_bottom(w))
-        else:
-            state["win"].lift()
 
     def update_note_pin_button(self, state):
         """图钉按钮的样子跟着状态变"""

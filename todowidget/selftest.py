@@ -99,13 +99,17 @@ def run_selftest():
         app.toggle_note_pin(state)
         pinned_ok = bool(target_item.get("note_pinned"))
         settle()
+        try:
+            on_top = bool(int(state["win"].attributes("-topmost")))
+        except Exception:
+            on_top = False
         time.sleep(0.45)
         app.simulate_click(second_leaf)
         settle()
         keep_ok = bool(app.notes)
         app.close_note()
         settle()
-    check("便签可以钉在桌面上", pinned_ok)
+    check("便签可以钉在最前面", pinned_ok and on_top)
     check("钉住的便签不会点别处就消失", keep_ok)
 
     state_before = target_item["done"]
