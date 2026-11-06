@@ -640,7 +640,6 @@ class NoteMixin:
         for line in raw.split("\n"):
             self.note_render_line(widget, line)
         widget.configure(state="disabled")
-        self.note_mark_links(state)
 
     def note_schedule_links(self, event=None):
         state = self.note_state_of(event.widget) if event is not None else None
@@ -766,7 +765,48 @@ class NoteMixin:
                 end = widget.index("end-1c")
                 widget.tag_add("code", start, end)
             else:
-                widget.insert("end", part)
+                self.note_insert_text_with_links(widget, part)
+
+    def shorten_link(self, url, limit=48):
+        """长链接显示成头尾 + 省略号, 点开还是完整地址"""
+        if len(url) <= limit:
+            return url
+        head = url[:limit - 16]
+        tail = url[-10:]
+        return head + "\u2026" + tail
+
+    def note_insert_text_with_links(self, widget, text):
+        """插入普通文字, 顺便把里面的网址做成可点的短链接"""
+        state = self.note_by_widget.get(widget)
+        if state is None:
+            widget.insert("end", text)
+            return
+        pos = 0
+        for match in LINK_RE.finditer(text):
+            if match.start() > pos:
+                widget.insert("end", text[pos:match.start()])
+            url = match.group(0).rstrip(LINK_TAIL)
+            start = widget.index("end-1c")
+            widget.insert("end", self.shorten_link(url))
+            end = widget.index("end-1c")
+            state["link_seq"] = state.get("link_seq", 0) + 1
+            tag = "noteurl{}".format(state["link_seq"])
+            widget.tag_add(tag, start, end)
+            widget.tag_configure(tag, foreground=P.note_link, underline=True)
+            widget.tag_bind(tag, "<Button-1>",
+                            lambda ev, u=url: self.note_url_click(ev, u))
+            widget.tag_bind(tag, "<Enter>",
+                            lambda ev, w=widget: w.configure(cursor="hand2"))
+            widget.tag_bind(tag, "<Leave>",
+                            lambda ev, w=widget: w.configure(cursor="xterm"))
+            pos = match.end()
+        if pos < len(text):
+            widget.insert("end", text[pos:])
+
+    def note_url_click(self, event, url):
+        """点短链接, 打开完整地址"""
+        open_url(url)
+        return "break"
 
     # ---------------- 关闭 ----------------
     def close_note(self, note_id=None, keep_pinned=False):
