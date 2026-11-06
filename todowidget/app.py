@@ -202,8 +202,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.tab_bars[key] = bar
 
         def start_drag(e):
-            if self.texture == "glass":
-                enable_acrylic(self.root, state=0)  # 拖动时先关模糊, 不然卡
             self._drag_from = (e.x_root, e.y_root)
             self._drag = (e.x_root - r.winfo_x(), e.y_root - r.winfo_y())
             self._drag_moved = False
@@ -219,8 +217,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                                        e.y_root - self._drag[1]))
 
         def end_drag(e, as_click=False):
-            if self.texture == "glass":
-                self.root.after(120, lambda: enable_acrylic(self.root))
             moved = getattr(self, "_drag_moved", False)
             self._drag = None
             self._drag_moved = False
@@ -528,6 +524,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.lift()
         if glass:
             r.after(80, lambda: enable_acrylic(r))
+        else:
+            r.after(10, lambda: enable_acrylic(r, state=0))
         if self.mode == "desktop" and not self.topmost:
             r.after(150, self.sink)
         r.after(60, self.round_window)
