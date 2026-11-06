@@ -85,7 +85,7 @@ class NoteMixin:
         state = {"id": note_id, "item": item, "win": win, "text": None,
                  "editing": True, "raw": item.get("note") or "",
                  "pinned": pinned, "link_job": None, "mode_btn": None,
-                 "pin_btn": None, "images": []}
+                 "pin_btn": None, "images": [], "image_map": {}}
         self.notes[note_id] = state
 
         body = tk.Frame(win, bg=P.note_bg)
@@ -166,11 +166,9 @@ class NoteMixin:
         text.tag_bind("link", "<Leave>",
                       lambda ev: text.configure(cursor="xterm"))
 
-        if state["raw"]:
-            text.insert("1.0", state["raw"])
+        self.note_fill_rich(state)
 
         drag = {"dx": 0, "dy": 0}
-
         def start_move(ev, w=win):
             drag["dx"] = ev.x_root - w.winfo_x()
             drag["dy"] = ev.y_root - w.winfo_y()
@@ -373,12 +371,17 @@ class NoteMixin:
         self.insert_image_token(state, name)
 
     def insert_image_token(self, state, name):
-        """在光标处插入一段图片引用 (预览时会变成真图)"""
+        """把刚加的图片插到光标处, 编辑态直接显示成图"""
         if not state["editing"]:
             self.note_toggle_mode(state)
-        token = "![]({})".format("note_images/" + name)
         widget = state["text"]
-        widget.insert("insert", "\n" + token + "\n")
+        path = "note_images/" + name
+        widget.insert("insert", "\n")
+        pos = widget.index("insert")
+        photo = self.insert_rich_image(widget, state, path, index=pos)
+        widget.insert(pos + " + 1c", "\n")
+        if photo is not None:
+            widget.mark_set("insert", pos + " + 2c")
         widget.see("insert")
         self.note_mark_links(state)
 
@@ -412,27 +415,15 @@ class NoteMixin:
         return None
 
     def insert_note_image(self, widget, path):
-        """在预览里把 ![](xxx) 画成真图"""
+        """预览里把 ![](xxx) 画成真图"""
         state = self.note_by_widget.get(widget)
-        if Image is None or state is None:
+        if state is None or Image is None:
             widget.insert("end", "![]({})".format(path))
             return
-        full = self.resolve_image_path(path)
-        if not full:
-            widget.insert("end", "\uff08\u56fe\u7247\u4e22\u4e86\uff09")
-            return
-        try:
-            image = Image.open(full)
-            max_width = max(200, state["win"].winfo_width() - 60)
-            if image.width > max_width:
-                ratio = max_width / float(image.width)
-                size = (int(image.width * ratio), int(image.height * ratio))
-                image = image.resize(size)
-            photo = ImageTk.PhotoImage(image)
-        except Exception:
+        photo = self.load_note_photo(state, path)
+        if photo is None:
             widget.insert("end", "\uff08\u56fe\u7247\u6253\u4e0d\u5f00\uff09")
             return
-        state["images"].append(photo)
         widget.image_create("end", image=photo, padx=2, pady=3)
 
     # ---------------- 编辑 / 预览 ----------------
@@ -478,19 +469,86 @@ class NoteMixin:
     def note_toggle_mode(self, state):
         widget = state["text"]
         if state["editing"]:
-            state["raw"] = widget.get("1.0", "end-1c")
+            state["raw"] = self.note_get_raw(state)
             self.note_render(state)
             state["editing"] = False
             state["mode_btn"].config(text="\u7f16\u8f91")
             return
 
-        widget.configure(state="normal")
-        widget.delete("1.0", "end")
-        if state["raw"]:
-            widget.insert("1.0", state["raw"])
         state["editing"] = True
+        self.note_fill_rich(state)
         state["mode_btn"].config(text="\u9884\u89c8")
         widget.focus_set()
+
+    def note_fill_rich(self, state):
+        """把原始文本装进编辑框, 图片直接显示成图"""
+        widget = state["text"]
+        widget.configure(state="normal")
+        widget.delete("1.0", "end")
+        state["images"] = []
+        state["image_map"] = {}
+        raw = state["raw"] or ""
+        pos = 0
+        for match in IMG_RE.finditer(raw):
+            chunk = raw[pos:match.start()]
+            if chunk:
+                widget.insert("end", chunk)
+            self.insert_rich_image(widget, state, match.group(1))
+            pos = match.end()
+        tail = raw[pos:]
+        if tail:
+            widget.insert("end", tail)
+
+    def insert_rich_image(self, widget, state, path, index="end"):
+        """在编辑框里直接画出图片, 同时记下对应的引用文字"""
+        token = "![]({})".format(path)
+        photo = self.load_note_photo(state, path)
+        if photo is None:
+            widget.insert(index, token)
+            return None
+        widget.image_create(index, image=photo, padx=2, pady=3)
+        state["image_map"][str(photo)] = token
+        return photo
+
+    def load_note_photo(self, state, path):
+        """读图片并按便签宽度缩放"""
+        if Image is None:
+            return None
+        full = self.resolve_image_path(path)
+        if not full:
+            return None
+        try:
+            image = Image.open(full)
+            max_width = max(200, state["win"].winfo_width() - 60)
+            if image.width > max_width:
+                ratio = max_width / float(image.width)
+                size = (int(image.width * ratio), int(image.height * ratio))
+                image = image.resize(size)
+            photo = ImageTk.PhotoImage(image)
+        except Exception:
+            return None
+        state["images"].append(photo)
+        return photo
+
+    def note_get_raw(self, state):
+        """从编辑框取回原始文本, 把图片还原成 ![](path)"""
+        widget = state["text"]
+        if widget is None:
+            return ""
+        try:
+            chunks = widget.dump("1.0", "end-1c", text=True, image=True)
+        except Exception:
+            try:
+                return widget.get("1.0", "end-1c")
+            except Exception:
+                return ""
+        parts = []
+        for kind, value, index in chunks:
+            if kind == "text":
+                parts.append(value)
+            elif kind == "image":
+                parts.append(state["image_map"].get(value, ""))
+        return "".join(parts)
 
     def note_render(self, state):
         widget = state["text"]
@@ -661,7 +719,7 @@ class NoteMixin:
         content = ""
         if editing and text is not None:
             try:
-                content = text.get("1.0", "end").strip()
+                content = self.note_get_raw(state).strip()
             except Exception:
                 content = ""
         elif raw:
