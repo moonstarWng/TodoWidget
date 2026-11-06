@@ -196,6 +196,7 @@ class NoteMixin:
         text.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
         win.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
         text.bind("<Double-Button-1>", self.note_image_double_click)
+        text.bind("<Button-1>", self.note_image_click, add="+")
         win.bind("<Configure>", lambda ev, s=state: self.round_note(s))
 
         self.make_note_grips(win, state)
@@ -242,10 +243,9 @@ class NoteMixin:
                 pass
         state["round_job"] = win.after(60, lambda w=win: round_corners(w, 14))
 
-    def note_image_double_click(self, event):
-        """双击图片放大查看"""
-        widget = event.widget
-        index = widget.index("@{},{}".format(event.x, event.y))
+    def image_token_at(self, widget, x, y):
+        """光标底下是不是一张图, 是就返回它的引用"""
+        index = widget.index("@{},{}".format(x, y))
         try:
             chunks = widget.dump(index, index + " +1c", text=False,
                                  image=True, mark=False, tag=False, window=False)
@@ -256,12 +256,31 @@ class NoteMixin:
         state = self.note_state_of(widget)
         if state is None:
             return None
-        token = state["image_map"].get(chunks[0][1])
+        return state["image_map"].get(chunks[0][1])
+
+    def open_image_token(self, token):
         match = IMG_RE.match(token or "")
         if not match:
-            return "break"
+            return False
         self.show_image_preview(match.group(1))
-        return "break"
+        return True
+
+    def note_image_click(self, event):
+        """预览态单击图片就放大 (编辑态单击还是挪光标)"""
+        state = self.note_state_of(event.widget)
+        if state is None or state["editing"]:
+            return None
+        token = self.image_token_at(event.widget, event.x, event.y)
+        if not token:
+            return None
+        return "break" if self.open_image_token(token) else None
+
+    def note_image_double_click(self, event):
+        """双击图片放大查看"""
+        token = self.image_token_at(event.widget, event.x, event.y)
+        if not token:
+            return None
+        return "break" if self.open_image_token(token) else None
 
     def show_image_preview(self, path):
         """大图查看窗口: 点一下或按 Esc 关掉"""
@@ -507,6 +526,8 @@ class NoteMixin:
             widget.insert("end", "\uff08\u56fe\u7247\u6253\u4e0d\u5f00\uff09")
             return
         widget.image_create("end", image=photo, padx=2, pady=3)
+        # 记下来, 预览态双击也能认出是哪张图
+        state["image_map"][str(photo)] = "![]({})".format(path)
 
     # ---------------- 编辑 / 预览 ----------------
     def note_state_of(self, widget):
