@@ -415,54 +415,8 @@ class ListViewMixin:
                 return
             self._dragging = True
             self.clear_hover()
-            self.show_ghost(self._drag_src)
-        self.move_ghost(e.x_root, e.y_root)
         self.autoscroll(e.y)
         self.update_hint(e.y)
-
-    def show_ghost(self, iid):
-        """跟着鼠标走的小卡片, 一眼看出在拖什么"""
-        ref = self._refs.get(iid)
-        if not ref:
-            return
-        item = ref["item"]
-        text = item["text"] or "(未命名)"
-        if len(text) > 20:
-            text = text[:19] + "\u2026"
-        if item.get("children"):
-            text = "\u2261 " + text
-        try:
-            g = tk.Toplevel(self.root)
-            g.overrideredirect(True)
-            g.attributes("-topmost", True)
-            try:
-                g.attributes("-alpha", 0.85)
-            except Exception:
-                pass
-            box = tk.Frame(g, bg=P.ghost_bg)
-            box.pack()
-            ghost_fg = best_text_color(P.ghost_bg)
-            tk.Label(box, text=text, bg=P.ghost_bg, fg=ghost_fg,
-                     font=self.f_group, padx=12, pady=6).pack()
-            self._ghost = g
-        except Exception:
-            self._ghost = None
-
-    def move_ghost(self, x, y):
-        if getattr(self, "_ghost", None) is not None:
-            try:
-                self._ghost.geometry("+{}+{}".format(x + 16, y + 14))
-            except Exception:
-                pass
-
-    def hide_ghost(self):
-        g = getattr(self, "_ghost", None)
-        self._ghost = None
-        if g is not None:
-            try:
-                g.destroy()
-            except Exception:
-                pass
 
     def on_release(self, e):
         dragging, src = self._dragging, self._drag_src
@@ -472,7 +426,6 @@ class ListViewMixin:
         self._dragging = False
         self._press_box = None
         self._press_pin = None
-        self.hide_ghost()
         self.hide_hint()
         if dragging:
             if src:

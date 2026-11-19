@@ -53,7 +53,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._marked = None
         self._hover = None
         self._press_box = None
-        self._ghost = None
         self._finish_edit = None
         self._tray = None
         self.collapsed = False
@@ -358,9 +357,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         style.layout("Todo.Vertical.TScrollbar", [
             ("Vertical.Scrollbar.trough", {"sticky": "ns", "children": [
                 ("Vertical.Scrollbar.thumb", {"expand": "1", "sticky": "nswe"})]})])
-        style.configure("Todo.Vertical.TScrollbar", background=P.border,
+        # 滚动条的拖动块用主题色, 别用灰的
+        style.configure("Todo.Vertical.TScrollbar", background=P.accent,
                         troughcolor=P.bg, bordercolor=P.bg, arrowcolor=P.fg_dim,
-                        darkcolor=P.border, lightcolor=P.border,
+                        darkcolor=P.accent, lightcolor=P.accent,
                         relief="flat", width=7)
 
         self.tree = ttk.Treeview(body, show="tree", style="Todo.Treeview",
@@ -1047,13 +1047,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if e.widget is not self.root:
             return
         # 挪窗口/改大小都用事件里的坐标立刻同步, 不然图片会慢半拍
-        if self.skin_win is not None:
+        # 动画期间尺寸由动画自己裁, 这里别用整窗大小把裁好的区域盖回去
+        if self.skin_win is not None and not self._animating:
             self.sync_skin(e.width, e.height, e.x, e.y)
         if getattr(self, "_win_size", None) == (e.width, e.height):
             return
         self._win_size = (e.width, e.height)
         self.fit_width(e.width)
-        if self.skin_win is not None:
+        if self.skin_win is not None and not self._animating:
             self.schedule_skin_crop()
         # 动画每帧自己更新圆角区域, 拖动改大小时也别每帧重切, 不然更闪
         if not self._animating and not self._resizing:

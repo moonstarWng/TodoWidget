@@ -32,10 +32,11 @@ class SettingsMixin:
 
     # ---------------- 窗口骨架 ----------------
 
-    def open_settings(self, pos=None):
+    def open_settings(self, pos=None, scroll_pos=None):
         """打开设置窗口; 已经开着就抬起来
 
         :param pos: 窗口位置, 不传就摆到主窗口中间
+        :param scroll_pos: 内容滚动位置, 重建后接着原来的地方
         """
         if self.settings_win is not None:
             try:
@@ -118,6 +119,16 @@ class SettingsMixin:
         win.after(30, lambda w=win: round_corners(w, 12))
         win.lift()
         win.focus_force()
+        if scroll_pos:
+            # 等滚动区域算好再跳回去, 内容高度是异步算的, 多试两次
+            def restore_scroll():
+                try:
+                    self._settings_scroll.update_idletasks()
+                    self._settings_scroll.yview_moveto(scroll_pos)
+                except Exception:
+                    pass
+            win.after(60, restore_scroll)
+            win.after(200, restore_scroll)
         # 模态: 设置关掉之前, 点主界面不会起作用
         try:
             win.grab_set()
@@ -183,15 +194,21 @@ class SettingsMixin:
             except Exception:
                 pass
 
-    def settings_pos(self):
-        """设置窗口当前的位置, 重新打开时接着用"""
+    def settings_state(self):
+        """记下设置窗口的位置和滚动位置, 重建界面后原样恢复"""
         win = self.settings_win
         if win is None:
-            return None
+            return {}
+        state = {}
         try:
-            return (win.winfo_x(), win.winfo_y())
+            state["pos"] = (win.winfo_x(), win.winfo_y())
         except Exception:
-            return None
+            pass
+        try:
+            state["scroll_pos"] = self._settings_scroll.yview()[0]
+        except Exception:
+            pass
+        return state
 
     # ---------------- 左侧分类 ----------------
 
@@ -533,10 +550,10 @@ class SettingsMixin:
             self.theme = "dark"
             self.accent = None
         self.save_conf()
-        pos = self.settings_pos()
+        state = self.settings_state()
         self.close_settings()
         self.reload_ui()
-        self.open_settings(pos)
+        self.open_settings(**state)
 
     def choose_show_stat(self, value):
         """顶栏统计显示 / 隐藏"""
@@ -551,13 +568,13 @@ class SettingsMixin:
         """换配色(整块界面重建)"""
         if key == self.theme:
             return
-        pos = self.settings_pos()
+        state = self.settings_state()
         self.close_settings()
         self.theme = key
         self.accent = None
         self.save_conf()
         self.reload_ui()
-        self.open_settings(pos)
+        self.open_settings(**state)
 
     def pick_accent(self):
         """自定义强调色"""
@@ -565,7 +582,7 @@ class SettingsMixin:
                                             title="选择强调色")
         if not picked:
             return
-        pos = self.settings_pos()
+        state = self.settings_state()
         self.close_settings()
         self.accent = picked
         custom = self.custom_theme()
@@ -576,7 +593,7 @@ class SettingsMixin:
             set_theme(self.theme, picked)
         self.save_conf()
         self.reload_ui()
-        self.open_settings(pos)
+        self.open_settings(**state)
 
     # ---------------- 自定义配色编辑器 ----------------
 
@@ -1114,10 +1131,10 @@ class SettingsMixin:
         except Exception:
             pass
         self.theme_editor = None
-        pos = self.settings_pos()
+        state = self.settings_state()
         self.close_settings()
         self.reload_ui()
-        self.open_settings(pos)
+        self.open_settings(**state)
 
     # ---------------- 排序 ----------------
 
@@ -1195,10 +1212,10 @@ class SettingsMixin:
         """切换贴桌面 / 普通窗口; 窗口要重摆, 设置窗口跟着重开一次"""
         if mode == self.mode:
             return
-        pos = self.settings_pos()
+        state = self.settings_state()
         self.close_settings()
         self.set_mode(mode)
-        self.open_settings(pos)
+        self.open_settings(**state)
 
     def choose_topmost(self, value):
         """切换总在最前"""
