@@ -514,7 +514,7 @@ class SettingsMixin:
             "mode": mode,
             "zoom": float(existing.get("zoom") or 1.0),
             "offset": list(existing.get("offset") or [0.0, 0.0]),
-            "alpha": float(existing.get("alpha") or 0.25),
+            "alpha": float(existing.get("alpha") or 0.2),
         }
 
         win = tk.Toplevel(self.settings_win or self.root)
@@ -592,6 +592,16 @@ class SettingsMixin:
         bg_btn.pack(side="left", padx=8)
         bg_btn.bind("<Button-1>", lambda ev: pick_bg())
 
+        # 预览按主窗口的宽高比来, 看到的就是实际会露出来的那一块
+        try:
+            win_w = self.root.winfo_width() or 330
+            win_h = self.root.winfo_height() or 460
+        except Exception:
+            win_w, win_h = 330, 460
+        ph = 260
+        pw = int(round(ph * float(win_w) / float(win_h)))
+        pw = max(130, min(400, pw))
+
         # 图片模式: 图片 + 拖动裁剪 + 缩放 + 透明度
         image_frame = tk.Frame(form, bg=P.bg)
         image_row = row(image_frame, "图片")
@@ -609,11 +619,15 @@ class SettingsMixin:
                              font=self.f_small, padx=6, pady=2, cursor="hand2")
         clear_btn.pack(side="left")
         clear_btn.bind("<Button-1>", lambda ev: clear_image())
+        reset_btn = tk.Label(image_row, text="重置", bg=P.bg, fg=P.fg_faint,
+                             font=self.f_small, padx=6, pady=2, cursor="hand2")
+        reset_btn.pack(side="left")
+        reset_btn.bind("<Button-1>", lambda ev: reset_view())
 
-        preview = tk.Canvas(image_frame, width=396, height=200, bg=P.bg_alt,
+        preview = tk.Canvas(image_frame, width=pw, height=ph, bg=P.bg_alt,
                             highlightthickness=1, highlightbackground=P.border,
                             cursor="fleur")
-        preview.pack(fill="x", pady=(0, 8))
+        preview.pack(anchor="w", pady=(0, 8))
 
         zoom_row = row(image_frame, "缩放", width=6)
         zoom_scale = tk.Scale(zoom_row, from_=100, to=250, resolution=5,
@@ -627,7 +641,7 @@ class SettingsMixin:
         zoom_value.pack(side="left", padx=8)
 
         alpha_row = row(image_frame, "透明度", width=6)
-        alpha_scale = tk.Scale(alpha_row, from_=5, to=55, resolution=5,
+        alpha_scale = tk.Scale(alpha_row, from_=5, to=45, resolution=5,
                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
                                troughcolor=P.bg_alt, highlightthickness=0, bd=0,
                                sliderrelief="flat", showvalue=False, length=220,
@@ -652,7 +666,7 @@ class SettingsMixin:
 
         note = self.settings_note(
             body, "图片模式：图片铺满整个窗口，主界面整体半透明，图片从底下透出来；"
-                  "在上面的预览里拖动可以选露哪一块。")
+                  "预览里拖动挪位置、滚轮缩放，比例跟实际窗口一致。")
         note.pack(fill="x", padx=18, pady=(8, 0))
 
         def pick_bg():
@@ -734,14 +748,27 @@ class SettingsMixin:
             render_preview()
 
         def set_alpha(value):
-            state["alpha"] = max(0.05, min(0.55, float(value) / 100.0))
+            state["alpha"] = max(0.05, min(0.45, float(value) / 100.0))
             alpha_value.config(
                 text="{}%".format(int(round(state["alpha"] * 100))))
+
+        def reset_view():
+            state["offset"] = [0.0, 0.0]
+            state["zoom"] = 1.0
+            zoom_scale.set(100)
+            render_preview()
+
+        def preview_wheel(ev):
+            step = 5 if ev.delta > 0 else -5
+            value = max(100, min(250, int(round(state["zoom"] * 100)) + step))
+            zoom_scale.set(value)
+            return "break"
 
         def render_preview():
             preview.delete("all")
             if not state["image"] or Image is None:
-                preview.create_text(198, 100, text="选一张图片后在这里拖动调整位置",
+                preview.create_text(pw // 2, ph // 2,
+                                    text="选一张图片后在这里拖动调整位置",
                                     fill=P.fg_faint, font=self.f_small)
                 return
             path = image_path()
@@ -753,7 +780,6 @@ class SettingsMixin:
                     image = Image.open(path).convert("RGB")
                     image.thumbnail((1600, 1600), Image.LANCZOS)
                     state["_pil"] = image
-                pw, ph = 396, 200
                 zoom = max(1.0, min(3.0, float(state["zoom"])))
                 scale = max(pw / float(image.width),
                             ph / float(image.height)) * zoom
@@ -801,6 +827,7 @@ class SettingsMixin:
         preview.bind("<ButtonPress-1>", preview_press)
         preview.bind("<B1-Motion>", preview_move)
         preview.bind("<ButtonRelease-1>", preview_release)
+        preview.bind("<MouseWheel>", preview_wheel)
 
         buttons = tk.Frame(body, bg=P.bg)
         buttons.pack(fill="x", padx=16, pady=14)

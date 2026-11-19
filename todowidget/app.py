@@ -64,6 +64,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_label = None
         self.skin_photo = None
         self._skin_size = None
+        self._skin_region_size = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
@@ -174,6 +175,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_label = None
         self.skin_photo = None
         self._skin_size = None
+        self._skin_region_size = None
         r = self.root
         is_desktop = self.mode == "desktop"
         r.title("待办清单")
@@ -678,7 +680,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
             self.root.geometry("{}x{}".format(target_w, target_h))
             self.sync_skin(target_w, target_h)
-            self.skin_round(start_w, start_h)
+            self.clip_skin(start_w, start_h)
             self.fit_width(target_w)
             use_anim = animate and self.mode == "desktop"
             animator = self.animate_reveal if use_anim else None
@@ -795,7 +797,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             head.update_idletasks()
             self.paint_head_bg(max(1, width - 2 - 2 * self._frame_pad))
             self.round_window(width, height)
-            self.skin_round(width, height)
+            self.clip_skin(width, height)
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -828,7 +830,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width = int(round(start_w + (target_w - start_w) * eased))
             height = int(round(start_h + (target_h - start_h) * eased))
             self.round_window(max(1, width), max(1, height))
-            self.skin_round(max(1, width), max(1, height))
+            self.clip_skin(max(1, width), max(1, height))
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -1008,12 +1010,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def on_win_configure(self, e):
         if e.widget is not self.root:
             return
+        # 挪窗口(尺寸没变)也要让图片窗口跟上, 不然图片会留在原地
+        if self.skin_win is not None:
+            self.sync_skin()
         if getattr(self, "_win_size", None) == (e.width, e.height):
             return
         self._win_size = (e.width, e.height)
         self.fit_width(e.width)
         if self.skin_win is not None:
-            self.sync_skin()
             self.root.after(160, self.refresh_skin_crop)
         # 动画每帧自己更新圆角区域, 拖动改大小时也别每帧重切, 不然更闪
         if not self._animating and not self._resizing:
@@ -1104,6 +1108,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_label = None
         self.skin_photo = None
         self._skin_size = None
+        self._skin_region_size = None
         if win is not None:
             try:
                 win.destroy()
@@ -1175,12 +1180,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 return
             width = int(width or root.winfo_width())
             height = int(height or root.winfo_height())
+            size = (max(2, width), max(2, height))
+            # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
+            if self._skin_region_size != size:
+                self.clip_skin(width, height)
             x = root.winfo_rootx()
             y = root.winfo_rooty()
-            win.geometry("{}x{}+{}+{}".format(max(2, width), max(2, height),
-                                              x, y))
+            win.geometry("{}x{}+{}+{}".format(size[0], size[1], x, y))
             self.place_skin_below()
-            self.skin_round(width, height)
         except Exception:
             pass
 
@@ -1193,6 +1200,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                                 0, 0, 0, 0, flags)
         except Exception:
             pass
+
+    def clip_skin(self, width, height):
+        """把皮肤窗口的显示区域裁到指定大小(动画每帧用)
+
+        :param width: 可见宽度
+        :param height: 可见高度
+        """
+        self.skin_round(width, height)
+        self._skin_region_size = (max(2, int(width)), max(2, int(height)))
 
     def skin_round(self, width, height):
         """皮肤窗口也切圆角, 免得从主窗口四角露出来"""
@@ -1267,8 +1283,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         alpha = float(self.alpha)
         if skin is not None:
             # 图片皮肤: 主窗口半透明, 让后面的图透出来
-            strength = float(skin.get("alpha") or 0.25)
-            strength = max(0.05, min(0.55, strength))
+            strength = float(skin.get("alpha") or 0.2)
+            strength = max(0.05, min(0.45, strength))
             alpha = alpha * (1.0 - strength)
         try:
             r.attributes("-topmost", bool(self.topmost))
