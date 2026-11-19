@@ -203,6 +203,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_size = None
         self._skin_region_size = None
         self._skin_crop_job = None
+        self._head_rect = None
         r = self.root
         is_desktop = self.mode == "desktop"
         r.title("待办清单")
@@ -712,7 +713,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             target_w, target_h = self._expanded_size or (330, 460)
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
             self.root.geometry("{}x{}".format(target_w, target_h))
-            self.sync_skin(target_w, target_h)
+            # 先只把皮肤窗口撑到目标大小, 区域留到下面按横条裁,
+            # 不然这一瞬间皮肤会整个铺开闪一下
+            self.sync_skin(target_w, target_h, clip=False)
             self.clip_skin(start_w, start_h)
             self.fit_width(target_w)
             use_anim = animate and self.mode == "desktop"
@@ -791,10 +794,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         canvas = getattr(self, "head_bg", None)
         if canvas is None:
             return
-        w = width or canvas.winfo_width()
-        canvas.delete("all")
+        w = max(1, width or canvas.winfo_width())
         fill = SKIN_KEY if self.skin_spec() is not None else P.head
-        canvas.create_rectangle(0, 0, max(1, w), 40, fill=fill, outline="")
+        # 复用同一个矩形, 别每帧删掉再画 —— 删掉的那一瞬间会闪一下
+        if getattr(self, "_head_rect", None) is None:
+            self._head_rect = canvas.create_rectangle(0, 0, w, 40,
+                                                      fill=fill, outline="")
+            return
+        canvas.coords(self._head_rect, 0, 0, w, 40)
+        canvas.itemconfigure(self._head_rect, fill=fill)
 
     def animate_collapse(self, start_w, start_h, target_w, target_h, done):
         """收起用: 窗口本身不动, 只按缓出曲线把显示区域缩上去
@@ -1402,13 +1410,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         self.refresh_skin_crop()
 
-    def sync_skin(self, width=None, height=None, x=None, y=None):
+    def sync_skin(self, width=None, height=None, x=None, y=None, clip=True):
         """让皮肤窗口跟着主窗口的位置/大小, 并压在主窗口下面
 
         :param width: 可见宽度(动画时传当前帧的值)
         :param height: 可见高度
         :param x: 主窗口左上角屏幕坐标, 不传就现取
         :param y: 同上
+        :param clip: 要不要顺手把皮肤区域裁成这个大小
         """
         win = self.skin_win
         if win is None:
@@ -1422,7 +1431,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             height = int(height or root.winfo_height())
             size = (max(2, width), max(2, height))
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
-            if self._skin_region_size != size:
+            if clip and self._skin_region_size != size:
                 self.clip_skin(width, height)
             if x is None:
                 x = root.winfo_rootx()
