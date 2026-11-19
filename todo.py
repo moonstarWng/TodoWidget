@@ -10,6 +10,7 @@
 import ctypes
 import sys
 
+from todowidget import updater
 from todowidget.app import TodoApp
 from todowidget.selftest import run_selftest
 from todowidget.utils import TkApp, single_instance
@@ -26,6 +27,7 @@ def main():
             None, "待办清单已经在运行了。\n图标在右下角托盘里，双击即可显示。",
             "待办清单", 0x40)
         return
+    updater.cleanup_old()
 
     root = TkApp()
     try:

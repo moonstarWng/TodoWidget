@@ -4,6 +4,7 @@
 import os
 import time
 
+from . import updater
 from .app import TodoApp
 from .paths import APP_DIR, CONF_FILE
 from .store import Store, new_item
@@ -207,6 +208,23 @@ def run_selftest():
     check("窗口缩小时底栏还在", bool(app._foot.winfo_ismapped()))
     root.geometry("330x460")
     settle()
+
+    # 设置窗口: 能打开、能切分类、能关掉
+    app.open_settings()
+    settle()
+    opened = app.settings_win is not None
+    app.show_settings_tab("about")
+    settle()
+    about_shown = bool(app._settings_panels["about"].winfo_ismapped())
+    app.show_settings_tab("look")
+    settle()
+    app.close_settings()
+    settle()
+    check("设置窗口能打开并切换分类", opened and about_shown)
+    check("设置窗口能关闭", app.settings_win is None)
+    check("版本号可以比较",
+          updater.parse_version("2026.11.19.2")
+          > updater.parse_version("2026.11.19.1"))
 
     app.set_tab("done")
     settle()

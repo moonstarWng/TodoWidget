@@ -69,6 +69,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
         self.settings_win = None
+        self.settings_tab = "look"
         self.notes = {}
         self.note_by_widget = {}
         self.prompt_win = None
@@ -923,6 +924,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def popup_header(self, e):
         m = tk.Menu(self.root, tearoff=0)
+        m.add_command(label="设置…", command=self.open_settings)
+        m.add_separator()
         m.add_command(label="显示 / 隐藏", command=self.hide)
         m.add_separator()
         m.add_checkbutton(label="总在最前", command=self.toggle_topmost,
@@ -1040,6 +1043,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
 
     def hide(self):
+        self.close_settings()
         self.save_geom()
         if self._tray is None:  # 没有托盘就别真藏起来, 最小化到任务栏
             self.set_mode("window")
@@ -1070,6 +1074,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         image = make_icon()
         menu = pystray.Menu(
             pystray.MenuItem("显示 / 隐藏", lambda: self.call(self.toggle_window), default=True),
+            pystray.MenuItem("设置…", lambda: self.call(self.open_settings)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("贴到桌面（占桌面, 不占任务栏）",
                              lambda: self.call(self.set_mode, "desktop"),
@@ -1112,6 +1117,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def quit(self):
         self.stop_title_fade()
+        self.close_settings()
         self.save_geom()
         self.close_note()
         if self._tray is not None:
