@@ -163,8 +163,7 @@ class ListViewMixin:
         # 页签和顶栏按根条目统计, 跟列表里看到的保持一致
         root_done = sum(1 for it in self.store.items if it.get("done"))
         root_total = len(self.store.items)
-        self.lbl_stat.config(
-            text="{} 项未完成 · {} 项已完成".format(root_total - root_done, root_done))
+        self.update_stat(root_total - root_done)
         self.update_tabs(root_done, root_total)
         try:
             self.pbar.place_configure(relwidth=(done / total) if total else 0)

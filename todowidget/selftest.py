@@ -168,7 +168,7 @@ def run_selftest():
     app.set_folded(True)
     settle_anim()
     folded_w = root.winfo_width()
-    stat_hidden = not app.lbl_stat.winfo_manager()
+    stat_hidden = not app.stat_box.winfo_manager()
     check("收起后横条变窄", folded_w < before_w and folded_w <= 220)
     check("收起后不显示统计文字", stat_hidden)
     check("收起后标题固定为待办清单",
@@ -179,7 +179,7 @@ def run_selftest():
           root.winfo_width() >= 270 and root.winfo_height() >= 220)
     wide_enough = root.winfo_width() >= 300
     check("展开后统计文字按宽度显示",
-          bool(app.lbl_stat.winfo_manager()) == wide_enough)
+          bool(app.stat_box.winfo_manager()) == wide_enough)
     check("展开后标题变回清单名", app.lbl_title.cget("text") != "待办清单")
 
     # 右下角调节柄: 解开时有, 锁住后消失

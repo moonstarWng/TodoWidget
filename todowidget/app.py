@@ -3,6 +3,7 @@
 
 import ctypes
 import json
+import os
 import threading
 import time
 
@@ -14,10 +15,11 @@ try:
 except Exception:
     pystray = None
 
-from .paths import CONF_FILE
+from .paths import APP_DIR, CONF_FILE
 from .store import Store
 from . import theme as T
-from .theme import P, hex_to_rgb, pick_font, set_theme, use_paper
+from .theme import (P, apply_palette, custom_scheme, hex_to_rgb, pick_font,
+                    set_theme, use_paper)
 from .utils import HAS_TRAY, enable_acrylic, make_icon, place_window
 
 if HAS_TRAY:
@@ -56,6 +58,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.resize_locked = bool(self.conf.get("resize_locked", False))
         self._resize_from = None
         self._resizing = False
+        self._resize_job = None
+        self._resize_target = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
@@ -68,6 +72,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._days_collapsed = False
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
+        self.custom_themes = self.conf.get("themes") or []
+        self.show_stat = bool(self.conf.get("show_stat", True))
+        self.bg_image = ""
+        self._theme_image = ""
         self.settings_win = None
         self.settings_tab = "look"
         self.notes = {}
@@ -100,7 +108,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                          collapsed=bool(self.collapsed), tab=self.tab,
                          sort_mode=self.sort_mode, texture=self.texture,
                          theme=self.theme, accent=self.accent,
-                         resize_locked=bool(self.resize_locked))
+                         resize_locked=bool(self.resize_locked),
+                         show_stat=bool(self.show_stat),
+                         themes=self.custom_themes)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.conf, f, ensure_ascii=False, indent=1)
@@ -119,12 +129,41 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     # ---------------- 界面 ----------------
 
+    def custom_theme(self, key=None):
+        """按 key 找一份自定义配色; 不传就找当前用的"""
+        key = key or self.theme
+        if not str(key).startswith("custom:"):
+            return None
+        theme_id = str(key)[len("custom:"):]
+        for theme in self.custom_themes:
+            if theme.get("id") == theme_id:
+                return theme
+        return None
+
+    def bg_image_path(self):
+        """当前主题的背景图片绝对路径, 没有就返回空"""
+        path = self._theme_image or ""
+        if not path:
+            return ""
+        if os.path.isabs(path):
+            return path if os.path.exists(path) else ""
+        full = os.path.join(APP_DIR, path.replace("/", os.sep))
+        return full if os.path.exists(full) else ""
+
     def apply_palette_choice(self):
         """按当前主题和质感选一套配色"""
+        self._theme_image = ""
         if self.texture == "paper":
             use_paper(self.accent)
         else:
-            set_theme(self.theme, self.accent)
+            custom = self.custom_theme()
+            if custom is not None:
+                apply_palette(custom_scheme(custom.get("bg") or "#17181d",
+                                            custom.get("accent") or "#5b9cff"))
+                self._theme_image = custom.get("image") or ""
+            else:
+                set_theme(self.theme, self.accent)
+        self.bg_image = self.bg_image_path()
 
     def build_ui(self):
         self.apply_palette_choice()
@@ -152,12 +191,27 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         inner.pack(fill="both", expand=True, padx=1, pady=1)
         self.inner = inner
 
+        # 自定义图片主题: 图片垫在最底下, 内容摆在一张卡片上, 四周露出图片
+        self._bg_label = None
+        self._bg_photo = None
+        self._bg_size = None
+        frame_pad = 10 if self.bg_image else 0
+        self._frame_pad = frame_pad
+        if self.bg_image:
+            self._bg_label = tk.Label(inner, bg=P.bg, bd=0,
+                                      highlightthickness=0)
+            self._bg_label.place(x=0, y=0, relwidth=1, relheight=1)
+            self._bg_label.lower()
+        card = tk.Frame(inner, bg=P.bg)
+        card.pack(fill="both", expand=True, padx=frame_pad, pady=frame_pad)
+        self.card = card
+
         # 勾选框用小图片画, 比字符清楚, 也方便只点框勾选
         self.img_on = self.make_box(True)
         self.img_off = self.make_box(False)
 
         # ---- 顶栏 ----
-        head = tk.Frame(inner, bg=P.head, height=40)
+        head = tk.Frame(card, bg=P.head, height=40)
         head.pack(fill="x", side="top")
         head.pack_propagate(False)
         self._head = head
@@ -172,9 +226,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.lbl_title = tk.Label(head, text="待办", bg=P.head, fg=P.fg,
                                   font=self.f_title, cursor="hand2")
         self.lbl_title.pack(side="left", padx=(0, 8))
-        self.lbl_stat = tk.Label(head, text="", bg=P.head, fg=P.fg_dim,
-                                 font=self.f_small)
-        self.lbl_stat.pack(side="left", pady=(3, 0))
+        # 未完成条数: 宽度固定, 太长就省略号; 设置里可以关掉
+        self.stat_box = tk.Frame(head, bg=P.head, width=82, height=22)
+        self.stat_box.pack(side="left", pady=(2, 0))
+        self.stat_box.pack_propagate(False)
+        self.lbl_stat = tk.Label(self.stat_box, text="", bg=P.head,
+                                 fg=P.fg_dim, font=self.f_small, anchor="w")
+        self.lbl_stat.pack(fill="both", expand=True)
 
         def icon_btn(text, cmd):
             b = tk.Label(head, text=text, bg=P.head, fg=P.fg_dim,
@@ -190,7 +248,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.btn_fold = icon_btn("\u25b4", self.toggle_fold)
 
         # 总进度条
-        track = tk.Frame(inner, bg=P.border, height=2)
+        track = tk.Frame(card, bg=P.border, height=2)
         track.pack(fill="x", side="top")
         track.pack_propagate(False)
         self._track = track
@@ -198,7 +256,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.pbar.place(x=0, y=0, relheight=1, relwidth=0)
 
         # ---- 未完成 / 已完成 两个页签 ----
-        tabbar = tk.Frame(inner, bg=P.bg, height=34)
+        tabbar = tk.Frame(card, bg=P.bg, height=34)
         tabbar.pack(fill="x", side="top")
         tabbar.pack_propagate(False)
         self._tabbar = tabbar
@@ -256,7 +314,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             widget.bind("<Double-Button-1>", lambda e: self.toggle_collapse_all())
 
         # ---- 列表 ----
-        body = tk.Frame(inner, bg=P.bg)
+        body = tk.Frame(card, bg=P.bg)
         body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
         self._body = body
 
@@ -331,15 +389,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.tree.bind("<Leave>", lambda e: self.clear_hover(), add="+")
 
         # 无边框窗口点击时不会自动获得焦点, 手动抢一下, 否则键盘快捷键失效
-        for w in (r, inner, body, self.tree):
+        for w in (r, inner, card, body, self.tree):
             w.bind("<Button-1>", self.grab_focus, add="+")
 
         # ---- 底栏 ----
-        foot = tk.Frame(inner, bg=P.bg, height=32)
+        foot = tk.Frame(card, bg=P.bg, height=32)
         foot.pack(fill="x", side="bottom")
         foot.pack_propagate(False)
         self._foot = foot
-        line = tk.Frame(inner, bg=P.border, height=1)
+        line = tk.Frame(card, bg=P.border, height=1)
         line.pack(fill="x", side="bottom")
         self._line = line
 
@@ -390,7 +448,39 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.bind("<Button-1>", self.on_any_click, add="+")
         r.bind("<Configure>", self.on_win_configure, add="+")
         r.bind("<Control-q>", lambda e: self.quit())
+        self.set_window_icon()
         self.apply_resize_state()
+        self.update_bg_image(force=True)
+        # 重建界面后按当前宽度再摆一次, 免得统计/提示停在旧状态
+        self._win_size = None
+        self.fit_width(self.root.winfo_width())
+
+    def set_window_icon(self):
+        """给窗口换成本程序的图标, 不设的话任务栏会显示 Tk 的羽毛"""
+        if not HAS_TRAY:
+            return
+        try:
+            photo = ImageTk.PhotoImage(make_icon(64))
+            self._icon_photo = photo
+            self.root.iconphoto(True, photo)
+        except Exception:
+            pass
+
+    def update_stat(self, pending):
+        """顶栏的未完成条数: 固定宽度, 放不下就用省略号
+
+        :param pending: 还没完成的条数
+        """
+        full = "{} 项未完成".format(pending)
+        width = self.stat_box.winfo_width() - 6
+        if width < 20:
+            width = 76
+        text = full
+        if self.f_small.measure(full) > width:
+            while text and self.f_small.measure(text + "\u2026") > width:
+                text = text[:-1]
+            text = (text + "\u2026") if text else ""
+        self.lbl_stat.config(text=text)
 
     def make_box(self, checked, size=16):
         """画一个勾选框小图标 (圆角方框, 勾在框里)"""
@@ -534,7 +624,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         head.update_idletasks()
         width = 0
         for child in head.winfo_children():
-            if child is self.lbl_stat or child is self.head_bg:
+            if child is self.stat_box or child is self.head_bg:
                 continue
             if child is self.lbl_title:
                 width += self.f_title.measure("待办清单")
@@ -542,6 +632,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width += child.winfo_reqwidth()
         # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
         width += 14 + 2 + 8 + 3 * 4 + 4
+        # 外侧 1px 描边 + 图片主题时卡片四周的留白
+        width += 2 + 2 * getattr(self, "_frame_pad", 0)
         return max(140, width)
 
     def set_folded(self, folded, on_done=None, animate=True):
@@ -561,7 +653,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         else:
             self.update_title()
         # 动画期间窗口比较矮, 先放开正常的最小尺寸, 结束再恢复
-        self.root.minsize(140, 42)
+        folded_h = 42 + 2 * self._frame_pad
+        self.root.minsize(140, folded_h)
         start_w = max(1, self.root.winfo_width())
         start_h = max(1, self.root.winfo_height())
         if self.collapsed:
@@ -578,8 +671,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self._expanded_size = (w, h)
             self.btn_fold.config(text="\u25be")
             # 收起后不看统计, 先把这一行去掉, 横条才缩得窄
-            self.lbl_stat.pack_forget()
-            target_w, target_h = self.folded_width(), 42
+            self.stat_box.pack_forget()
+            target_w, target_h = self.folded_width(), folded_h
             # 下面的内容钉住不动, 跟着窗口边缘被裁掉
             if animate:
                 self.freeze_content()
@@ -686,9 +779,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         """
         self.stop_fold_anim()
         head = self._head
+        inner_w = max(1, start_w - 2 - 2 * self._frame_pad)
         if head.winfo_manager() != "place":
             head.pack_forget()
-            head.place(x=0, y=0, width=max(1, start_w - 2), height=40)
+            head.place(x=0, y=0, width=inner_w, height=40)
         steps = 14
         state = {"step": 0}
 
@@ -699,11 +793,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             eased = 1.0 - (1.0 - ratio) ** 3
             width = max(1, int(round(start_w + (target_w - start_w) * eased)))
             height = max(1, int(round(start_h + (target_h - start_h) * eased)))
-            head.place_configure(width=max(1, width - 2))
+            head.place_configure(
+                width=max(1, width - 2 - 2 * self._frame_pad))
             # 先把顶栏排好、重画底色, 再把显示区域收上来:
             # 不然区域比顶栏窄一帧会切掉右边的按钮, 按钮移动还会留残影
             head.update_idletasks()
-            self.paint_head_bg(max(1, width - 2))
+            self.paint_head_bg(max(1, width - 2 - 2 * self._frame_pad))
             self.round_window(width, height)
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
@@ -769,10 +864,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         for widget in (self._track, self._tabbar, self._body,
                        self._foot, self._line):
             widget.pack_forget()
-        self.lbl_stat.pack_forget()
+        self.stat_box.pack_forget()
         if width and height:
             self.root.geometry("{}x{}".format(width, height))
-        self.root.minsize(140, 42)
+        self.root.minsize(140, 42 + 2 * self._frame_pad)
         self.apply_resize_state()
         self.round_window(width, height)
 
@@ -797,20 +892,45 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._resizing = True
 
     def on_resize(self, e):
-        """按住斜纹拖动: 按位移同时改宽和高"""
+        """按住斜纹拖动: 按位移同时改宽和高
+
+        每帧都直接改 geometry 会重画很多遍, 攒一下再改, 拖起来更稳。
+        """
         if not self._resize_from:
             return
         x0, y0, w0, h0 = self._resize_from
         width = max(270, w0 + (e.x_root - x0))
         height = max(220, h0 + (e.y_root - y0))
-        self.root.geometry("{}x{}".format(width, height))
+        self._resize_target = (width, height)
+        if self._resize_job is None:
+            self._resize_job = self.root.after(12, self.apply_resize_size)
+
+    def apply_resize_size(self):
+        """把攒下来的目标宽高真正应用到窗口上"""
+        self._resize_job = None
+        target = getattr(self, "_resize_target", None)
+        if not target:
+            return
+        self.root.geometry("{}x{}".format(target[0], target[1]))
 
     def end_resize(self, e):
         """松手: 把新的宽高记进配置"""
         if not self._resize_from:
             return
+        if self._resize_job is not None:
+            try:
+                self.root.after_cancel(self._resize_job)
+            except Exception:
+                pass
+            self._resize_job = None
+        target = getattr(self, "_resize_target", None)
+        if target:
+            self.root.geometry("{}x{}".format(target[0], target[1]))
+        self._resize_target = None
         self._resize_from = None
         self._resizing = False
+        self.round_window()
+        self.update_bg_image()
         self.save_geom()
 
     def toggle_resize_lock(self):
@@ -850,7 +970,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def fit_width(self, width):
         """窗口拖窄时先收起次要文字, 别把折叠、齿轮这些要紧的挤掉"""
-        narrow = width < 300 or bool(getattr(self, "collapsed", False))
+        avail = width - 2 - 2 * getattr(self, "_frame_pad", 0)
+        narrow = avail < 300 or bool(getattr(self, "collapsed", False))
         tip = getattr(self, "tip", None)
         if tip is not None:
             shown = bool(tip.winfo_manager())
@@ -862,14 +983,28 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 if anchor is not None:
                     options["after"] = anchor
                 tip.pack(**options)
-        stat = getattr(self, "lbl_stat", None)
-        if stat is None:
+        box = getattr(self, "stat_box", None)
+        if box is None:
             return
-        shown = bool(stat.winfo_manager())
-        if narrow and shown:
-            stat.pack_forget()
-        elif not narrow and not shown:
-            stat.pack(side="left", pady=(3, 0), after=self.lbl_title)
+        show = self.show_stat and not self.collapsed and avail >= self.stat_need()
+        shown = bool(box.winfo_manager())
+        if show and not shown:
+            box.pack(side="left", pady=(2, 0), after=self.lbl_title)
+        elif not show and shown:
+            box.pack_forget()
+
+    def stat_need(self):
+        """顶栏放下统计文字至少要多宽"""
+        head = self._head
+        total = 0
+        for child in head.winfo_children():
+            if child is self.stat_box or child is self.head_bg:
+                continue
+            total += child.winfo_reqwidth()
+        # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
+        total += 14 + 2 + 8 + 3 * 4 + 4
+        stat_width = self.stat_box.winfo_reqwidth() or 82
+        return total + stat_width + 12
 
     def on_win_configure(self, e):
         if e.widget is not self.root:
@@ -878,9 +1013,38 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         self._win_size = (e.width, e.height)
         self.fit_width(e.width)
-        # 动画每帧自己更新圆角区域, 这里不用再排一次
-        if not self._animating:
+        if self._bg_label is not None:
+            self.root.after(120, self.update_bg_image)
+        # 动画每帧自己更新圆角区域, 拖动改大小时也别每帧重切, 不然更闪
+        if not self._animating and not self._resizing:
             self.root.after(15, self.round_window)
+
+    def update_bg_image(self, force=False):
+        """按窗口当前大小裁好背景图, 铺在卡片底下
+
+        :param force: 尺寸没变也重画一次
+        """
+        label = getattr(self, "_bg_label", None)
+        if label is None or not HAS_TRAY:
+            return
+        path = self.bg_image_path()
+        if not path:
+            return
+        width = max(20, self.root.winfo_width())
+        height = max(20, self.root.winfo_height())
+        if not force and self._bg_size == (width, height):
+            return
+        try:
+            from PIL import Image, ImageEnhance, ImageOps
+            image = Image.open(path).convert("RGB")
+            image = ImageOps.fit(image, (width, height), method=Image.LANCZOS)
+            image = ImageEnhance.Brightness(image).enhance(0.92)
+            photo = ImageTk.PhotoImage(image)
+            label.configure(image=photo)
+            self._bg_photo = photo
+            self._bg_size = (width, height)
+        except Exception:
+            pass
 
     def round_window(self, width=None, height=None):
         """无边框 + 圆角, 看着像个小组件

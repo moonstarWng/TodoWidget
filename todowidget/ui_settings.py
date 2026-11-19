@@ -4,9 +4,11 @@
 import ctypes
 import os
 import queue
+import shutil
 import threading
 import tkinter as tk
-from tkinter import colorchooser, messagebox
+import uuid
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 from . import updater
 from .paths import APP_DIR
@@ -59,9 +61,23 @@ class SettingsMixin:
         side = tk.Frame(content, bg=P.bg_alt, width=116)
         side.pack(side="left", fill="y")
         side.pack_propagate(False)
-        pane = tk.Frame(content, bg=P.bg)
-        pane.pack(side="left", fill="both", expand=True)
-        self._settings_pane = pane
+        # 内容多了可以滚, 配色一多一屏放不下
+        scroll = tk.Canvas(content, bg=P.bg, highlightthickness=0, bd=0)
+        bar = ttk.Scrollbar(content, orient="vertical",
+                            command=scroll.yview,
+                            style="Todo.Vertical.TScrollbar")
+        bar.pack(side="right", fill="y")
+        scroll.pack(side="left", fill="both", expand=True)
+        scroll.configure(yscrollcommand=bar.set)
+        self._settings_scroll = scroll
+        holder = tk.Frame(scroll, bg=P.bg)
+        self._settings_holder = holder
+        holder_id = scroll.create_window((0, 0), window=holder, anchor="nw")
+        holder.bind("<Configure>",
+                    lambda ev: scroll.configure(scrollregion=scroll.bbox("all")))
+        scroll.bind("<Configure>",
+                    lambda ev: scroll.itemconfigure(holder_id, width=ev.width))
+        win.bind("<MouseWheel>", self.scroll_settings)
 
         for key, label in SETTINGS_TABS:
             self.make_settings_tab(side, key, label)
@@ -71,7 +87,7 @@ class SettingsMixin:
                    "window": self.build_window_panel,
                    "about": self.build_about_panel}
         for key, _label in SETTINGS_TABS:
-            panel = tk.Frame(pane, bg=P.bg)
+            panel = tk.Frame(holder, bg=P.bg)
             builder[key](panel)
             self._settings_panels[key] = panel
 
@@ -148,6 +164,7 @@ class SettingsMixin:
 
     def close_settings(self):
         """关掉设置窗口, 顺便把模态抓取放开"""
+        self.close_theme_editor()
         win = self.settings_win
         self.settings_win = None
         if win is not None:
@@ -200,6 +217,18 @@ class SettingsMixin:
             text.configure(bg=P.bg if chosen else P.bg_alt,
                            fg=P.fg if chosen else P.fg_dim)
             bar.configure(bg=P.accent if chosen else P.bg_alt)
+        try:
+            self._settings_scroll.yview_moveto(0)
+        except Exception:
+            pass
+
+    def scroll_settings(self, event):
+        """鼠标滚轮滚动设置内容"""
+        try:
+            step = int(-event.delta / 120) * 3
+            self._settings_scroll.yview_scroll(step, "units")
+        except Exception:
+            pass
 
     # ---------------- 通用小部件 ----------------
 
@@ -268,10 +297,35 @@ class SettingsMixin:
     # ---------------- 外观 ----------------
 
     def build_look_panel(self, panel):
-        """配色 / 强调色 / 质感"""
-        holder = self.settings_block(panel, "配色", "整套界面的颜色")
-        for key, label in THEME_NAMES:
-            self.make_theme_chip(holder, key, label)
+        """配色 / 自定义配色 / 强调色 / 质感 / 统计"""
+        holder = self.settings_block(
+            panel, "配色",
+            "点色块直接换；自定义配色可以右键编辑或删除")
+        grid = tk.Frame(holder, bg=P.bg)
+        grid.pack(fill="x")
+        items = list(THEME_NAMES)
+        for theme in self.custom_themes:
+            items.append(("custom:" + str(theme.get("id")), theme.get("name") or "自定义"))
+        row = None
+        for index, (key, label) in enumerate(items):
+            if index % 4 == 0:
+                row = tk.Frame(grid, bg=P.bg)
+                row.pack(fill="x", pady=(0, 6))
+            custom = self.custom_theme(key)
+            if custom is not None:
+                self.make_custom_theme_chip(row, custom)
+            else:
+                self.make_theme_chip(row, key, label)
+
+        add_row = tk.Frame(holder, bg=P.bg)
+        add_row.pack(fill="x", pady=(6, 0))
+        add = tk.Label(add_row, text="\uff0b 自定义配色…", bg=P.bg_alt,
+                       fg=P.fg_dim, font=self.f_small, padx=12, pady=5,
+                       cursor="hand2")
+        add.pack(side="left")
+        add.bind("<Button-1>", lambda ev: self.open_theme_editor())
+        add.bind("<Enter>", lambda ev, w=add: w.configure(bg=P.hover))
+        add.bind("<Leave>", lambda ev, w=add: w.configure(bg=P.bg_alt))
 
         holder = self.settings_block(panel, "强调色",
                                      "勾选框、进度条、选中项会跟着变")
@@ -293,23 +347,98 @@ class SettingsMixin:
                                group="texture", value=key)
         self.settings_note(panel, "磨砂要 Win10 1803 以上，系统不支持会自动退回纯色。")
 
+        holder = self.settings_block(panel, "统计", "顶栏显示还剩多少条没做")
+        self.settings_chip(holder, "显示", self.show_stat,
+                           lambda: self.choose_show_stat(True),
+                           group="stat", value=True)
+        self.settings_chip(holder, "隐藏", not self.show_stat,
+                           lambda: self.choose_show_stat(False),
+                           group="stat", value=False)
+
     def make_theme_chip(self, parent, key, label):
-        """配色色块 + 名字"""
+        """内置配色的色块 + 名字"""
         theme = THEMES[key]
         chosen = (key == self.theme)
         cell = tk.Frame(parent, bg=P.bg, cursor="hand2")
-        cell.pack(side="left", padx=(0, 16))
+        cell.pack(side="left", padx=(0, 12))
         border = P.fg if chosen else P.border
-        swatch = tk.Frame(cell, bg=theme["accent"], width=38, height=24,
+        swatch = tk.Frame(cell, bg=theme["bg"], width=38, height=24,
                           highlightthickness=2 if chosen else 1,
                           highlightbackground=border)
         swatch.pack()
         swatch.pack_propagate(False)
+        accent = tk.Frame(swatch, bg=theme["accent"], width=12, height=12)
+        accent.place(x=13, y=6)
         name = tk.Label(cell, text=label, bg=P.bg,
                         fg=P.fg if chosen else P.fg_dim, font=self.f_small)
         name.pack(pady=(4, 0))
         for widget in (cell, swatch, name):
             widget.bind("<Button-1>", lambda ev, k=key: self.choose_theme(k))
+
+    def make_custom_theme_chip(self, parent, theme):
+        """自定义配色的色块 + 名字, 右键可以编辑或删除"""
+        key = "custom:" + str(theme.get("id"))
+        chosen = (key == self.theme)
+        cell = tk.Frame(parent, bg=P.bg, cursor="hand2")
+        cell.pack(side="left", padx=(0, 12))
+        border = P.fg if chosen else P.border
+        swatch = tk.Frame(cell, bg=theme.get("bg") or P.bg, width=38, height=24,
+                          highlightthickness=2 if chosen else 1,
+                          highlightbackground=border)
+        swatch.pack()
+        swatch.pack_propagate(False)
+        accent = tk.Frame(swatch, bg=theme.get("accent") or P.accent,
+                          width=12, height=12)
+        accent.place(x=13, y=6)
+        name = tk.Label(cell, text=theme.get("name") or "自定义", bg=P.bg,
+                        fg=P.fg if chosen else P.fg_dim, font=self.f_small)
+        name.pack(pady=(4, 0))
+        for widget in (cell, swatch, name):
+            widget.bind("<Button-1>", lambda ev, k=key: self.choose_theme(k))
+            widget.bind("<Button-3>",
+                        lambda ev, t=theme: self.popup_custom_theme(ev, t))
+
+    def popup_custom_theme(self, event, theme):
+        """右键自定义配色: 编辑 / 删除"""
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="编辑配色…",
+                         command=lambda: self.open_theme_editor(theme))
+        menu.add_command(label="删除配色",
+                         command=lambda: self.delete_custom_theme(theme))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def delete_custom_theme(self, theme):
+        """删掉一份自定义配色"""
+        name = theme.get("name") or "自定义"
+        confirmed = messagebox.askyesno(
+            "删除配色", "删除配色「{}」？".format(name), parent=self.settings_win)
+        if not confirmed:
+            return
+        keep = []
+        for item in self.custom_themes:
+            if item.get("id") != theme.get("id"):
+                keep.append(item)
+        self.custom_themes = keep
+        if self.theme == "custom:" + str(theme.get("id")):
+            self.theme = "dark"
+            self.accent = None
+        self.save_conf()
+        pos = self.settings_pos()
+        self.close_settings()
+        self.reload_ui()
+        self.open_settings(pos)
+
+    def choose_show_stat(self, value):
+        """顶栏统计显示 / 隐藏"""
+        self.show_stat = bool(value)
+        self.save_conf()
+        pending = sum(1 for it in self.store.items if not it.get("done"))
+        self.update_stat(pending)
+        self.fit_width(self.root.winfo_width())
+        self.restyle_group("stat", self.show_stat)
 
     def choose_theme(self, key):
         """换配色(整块界面重建)"""
@@ -319,7 +448,8 @@ class SettingsMixin:
         self.close_settings()
         self.theme = key
         self.accent = None
-        set_theme(key, None)
+        if self.custom_theme(key) is None:
+            set_theme(key, None)
         self.save_conf()
         self.reload_ui()
         self.open_settings(pos)
@@ -333,7 +463,12 @@ class SettingsMixin:
         pos = self.settings_pos()
         self.close_settings()
         self.accent = picked
-        set_theme(self.theme, picked)
+        custom = self.custom_theme()
+        if custom is not None:
+            # 自定义配色的强调色存在它自己身上
+            custom["accent"] = picked
+        else:
+            set_theme(self.theme, picked)
         self.save_conf()
         self.reload_ui()
         self.open_settings(pos)
@@ -346,6 +481,228 @@ class SettingsMixin:
         self.close_settings()
         self.texture = key
         self.save_conf()
+        self.reload_ui()
+        self.open_settings(pos)
+
+    # ---------------- 自定义配色编辑器 ----------------
+
+    def copy_theme_image(self, source):
+        """把选的背景图复制到 theme_bg 目录, 返回相对路径"""
+        folder = os.path.join(APP_DIR, "theme_bg")
+        if not os.path.isdir(folder):
+            os.makedirs(folder)
+        ext = os.path.splitext(source)[1].lower() or ".png"
+        name = uuid.uuid4().hex[:10] + ext
+        shutil.copyfile(source, os.path.join(folder, name))
+        return "theme_bg/" + name
+
+    def open_theme_editor(self, theme=None):
+        """新建 / 编辑一份自定义配色
+
+        :param theme: 要编辑的配色字典; 不传就是新建
+        """
+        existing = dict(theme) if theme else {}
+        state = {
+            "bg": existing.get("bg") or "#1b1d24",
+            "accent": existing.get("accent") or P.accent,
+            "image": existing.get("image") or "",
+        }
+
+        win = tk.Toplevel(self.settings_win or self.root)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg=P.border)
+        self.theme_editor = win
+
+        body = tk.Frame(win, bg=P.bg)
+        body.pack(fill="both", expand=True, padx=1, pady=1)
+        head = tk.Frame(body, bg=P.head, height=38)
+        head.pack(fill="x")
+        head.pack_propagate(False)
+        title = "编辑配色" if theme else "新建配色"
+        tk.Label(head, text=title, bg=P.head, fg=P.fg,
+                 font=self.f_group).pack(side="left", padx=14)
+        close = tk.Label(head, text="\u2715", bg=P.head, fg=P.fg_dim,
+                         font=self.f_small, width=2, cursor="hand2")
+        close.pack(side="right", padx=6)
+        close.bind("<Button-1>", lambda ev: self.close_theme_editor())
+
+        form = tk.Frame(body, bg=P.bg)
+        form.pack(fill="both", expand=True, padx=16, pady=(12, 0))
+
+        def row_label(parent, text):
+            tk.Label(parent, text=text, bg=P.bg, fg=P.fg_dim,
+                     font=self.f_small, anchor="w", width=8).pack(side="left")
+
+        name_row = tk.Frame(form, bg=P.bg)
+        name_row.pack(fill="x", pady=(0, 10))
+        row_label(name_row, "名称")
+        name_var = tk.StringVar(value=existing.get("name") or
+                               "我的配色 {}".format(len(self.custom_themes) + 1))
+        entry = tk.Entry(name_row, textvariable=name_var, bg=P.bg_alt, fg=P.fg,
+                         insertbackground=P.accent, relief="flat", bd=0,
+                         highlightthickness=1, highlightbackground=P.border,
+                         highlightcolor=P.accent, font=self.f_item)
+        entry.pack(side="left", fill="x", expand=True, ipady=4)
+
+        bg_row = tk.Frame(form, bg=P.bg)
+        bg_row.pack(fill="x", pady=(0, 10))
+        row_label(bg_row, "底色")
+        bg_swatch = tk.Frame(bg_row, bg=state["bg"], width=36, height=22,
+                             highlightthickness=1, highlightbackground=P.border)
+        bg_swatch.pack(side="left")
+        bg_swatch.pack_propagate(False)
+
+        def pick_bg():
+            _, picked = colorchooser.askcolor(color=state["bg"], parent=win,
+                                              title="选择底色")
+            if picked:
+                state["bg"] = picked
+                bg_swatch.configure(bg=picked)
+
+        bg_btn = tk.Label(bg_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
+                          font=self.f_small, padx=10, pady=2, cursor="hand2")
+        bg_btn.pack(side="left", padx=8)
+        bg_btn.bind("<Button-1>", lambda ev: pick_bg())
+
+        accent_row = tk.Frame(form, bg=P.bg)
+        accent_row.pack(fill="x", pady=(0, 10))
+        row_label(accent_row, "强调色")
+        accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
+                                 height=22, highlightthickness=1,
+                                 highlightbackground=P.border)
+        accent_swatch.pack(side="left")
+        accent_swatch.pack_propagate(False)
+
+        def pick_accent():
+            _, picked = colorchooser.askcolor(color=state["accent"], parent=win,
+                                              title="选择强调色")
+            if picked:
+                state["accent"] = picked
+                accent_swatch.configure(bg=picked)
+
+        accent_btn = tk.Label(accent_row, text="选择…", bg=P.bg_alt,
+                              fg=P.fg_dim, font=self.f_small, padx=10, pady=2,
+                              cursor="hand2")
+        accent_btn.pack(side="left", padx=8)
+        accent_btn.bind("<Button-1>", lambda ev: pick_accent())
+
+        image_row = tk.Frame(form, bg=P.bg)
+        image_row.pack(fill="x", pady=(0, 4))
+        row_label(image_row, "背景图片")
+        image_label = tk.Label(image_row,
+                               text=os.path.basename(state["image"]) or "没有",
+                               bg=P.bg, fg=P.fg_dim, font=self.f_small,
+                               anchor="w")
+        image_label.pack(side="left", fill="x", expand=True)
+
+        def pick_image():
+            path = filedialog.askopenfilename(
+                parent=win, title="选择背景图片",
+                filetypes=[("图片", "*.png *.jpg *.jpeg *.bmp *.gif *.webp"),
+                           ("所有文件", "*.*")])
+            if not path:
+                return
+            try:
+                state["image"] = self.copy_theme_image(path)
+            except Exception as exc:
+                messagebox.showerror("选择图片", "复制图片失败：{}".format(exc),
+                                     parent=win)
+                return
+            image_label.config(text=os.path.basename(state["image"]))
+
+        image_btn = tk.Label(image_row, text="选图片…", bg=P.bg_alt,
+                             fg=P.fg_dim, font=self.f_small, padx=10, pady=2,
+                             cursor="hand2")
+        image_btn.pack(side="left", padx=8)
+        image_btn.bind("<Button-1>", lambda ev: pick_image())
+        clear_btn = tk.Label(image_row, text="清除", bg=P.bg, fg=P.fg_faint,
+                             font=self.f_small, padx=6, pady=2, cursor="hand2")
+        clear_btn.pack(side="left")
+
+        def clear_image():
+            state["image"] = ""
+            image_label.config(text="没有")
+
+        clear_btn.bind("<Button-1>", lambda ev: clear_image())
+
+        self.settings_note(panel_note := tk.Frame(body, bg=P.bg),
+                           "背景图片铺在窗口最底下，列表会放在一张卡片上，"
+                           "四周露出图片。")
+        panel_note.pack(fill="x", padx=18, pady=(6, 0))
+
+        buttons = tk.Frame(body, bg=P.bg)
+        buttons.pack(fill="x", padx=16, pady=14)
+        cancel = tk.Label(buttons, text="取消", bg=P.bg_alt, fg=P.fg_dim,
+                          font=self.f_small, padx=14, pady=6, cursor="hand2")
+        cancel.pack(side="right")
+        cancel.bind("<Button-1>", lambda ev: self.close_theme_editor())
+        save = tk.Label(buttons, text="保存", bg=P.accent,
+                        fg=best_text_color(P.accent), font=self.f_small,
+                        padx=16, pady=6, cursor="hand2")
+        save.pack(side="right", padx=(0, 8))
+        save.bind("<Button-1>", lambda ev: self.save_custom_theme(
+            state, name_var, theme, win))
+
+        win.bind("<Escape>", lambda ev: self.close_theme_editor())
+        width, height = 420, 330
+        base = self.settings_win or self.root
+        x = base.winfo_rootx() + (base.winfo_width() - width) // 2
+        y = base.winfo_rooty() + (base.winfo_height() - height) // 2
+        win.geometry("{}x{}+{}+{}".format(width, height, max(0, x), max(0, y)))
+        win.deiconify()
+        win.after(20, lambda w=win: round_corners(w, 12))
+        win.lift()
+        win.focus_force()
+        entry.focus_set()
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+    def close_theme_editor(self):
+        """关掉配色编辑框"""
+        win = getattr(self, "theme_editor", None)
+        self.theme_editor = None
+        if win is not None:
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+    def save_custom_theme(self, state, name_var, theme, win):
+        """保存自定义配色并马上用上
+
+        :param state: 里面是 bg / accent / image
+        :param name_var: 名称输入框
+        :param theme: 原来的配色字典; 新建时是 None
+        :param win: 编辑框窗口
+        """
+        name = name_var.get().strip() or "我的配色"
+        if theme is None:
+            theme = {"id": uuid.uuid4().hex[:8]}
+            self.custom_themes.append(theme)
+        theme.update(name=name, bg=state["bg"], accent=state["accent"],
+                     image=state["image"])
+        self.theme = "custom:" + theme["id"]
+        self.accent = None
+        self.save_conf()
+        try:
+            win.grab_release()
+        except Exception:
+            pass
+        try:
+            win.destroy()
+        except Exception:
+            pass
+        self.theme_editor = None
+        pos = self.settings_pos()
+        self.close_settings()
         self.reload_ui()
         self.open_settings(pos)
 

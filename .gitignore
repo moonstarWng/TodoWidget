@@ -11,6 +11,8 @@ __pycache__/
 
 # 便签图片
 note_images/
+# 自定义配色的背景图
+theme_bg/
 
 # 本机配置与私有数据, 不进仓库
 todo_config.json
