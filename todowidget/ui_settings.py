@@ -355,45 +355,62 @@ class SettingsMixin:
                            lambda: self.choose_show_stat(False),
                            group="stat", value=False)
 
-    def make_theme_chip(self, parent, key, label):
-        """内置配色的色块 + 名字"""
-        theme = THEMES[key]
-        chosen = (key == self.theme)
-        cell = tk.Frame(parent, bg=P.bg, cursor="hand2")
-        cell.pack(side="left", padx=(0, 12))
+    THEME_CELL_WIDTH = 78
+    THEME_CELL_HEIGHT = 50
+
+    def theme_cell(self, parent):
+        """配色格子的固定大小, 保证横竖对齐"""
+        cell = tk.Frame(parent, bg=P.bg, cursor="hand2",
+                        width=self.THEME_CELL_WIDTH,
+                        height=self.THEME_CELL_HEIGHT)
+        cell.pack(side="left", padx=(0, 10))
+        cell.pack_propagate(False)
+        return cell
+
+    def theme_swatch(self, cell, bg, accent, chosen):
+        """格子里的色块: 底色 + 中间一小块强调色
+
+        强调色那一小块也要绑点击, 不然点正中间没反应。
+        """
         border = P.fg if chosen else P.border
-        swatch = tk.Frame(cell, bg=theme["bg"], width=38, height=24,
+        swatch = tk.Frame(cell, bg=bg, width=38, height=24,
                           highlightthickness=2 if chosen else 1,
                           highlightbackground=border)
-        swatch.pack()
-        swatch.pack_propagate(False)
-        accent = tk.Frame(swatch, bg=theme["accent"], width=12, height=12)
-        accent.place(x=13, y=6)
-        name = tk.Label(cell, text=label, bg=P.bg,
+        swatch.place(relx=0.5, y=0, anchor="n")
+        dot = tk.Frame(swatch, bg=accent, width=12, height=12)
+        dot.place(x=13, y=6)
+        return swatch, dot
+
+    def theme_name(self, cell, text, chosen, limit=9):
+        """格子下面的名字; 太长的名字截一下"""
+        if len(text) > limit:
+            text = text[:limit - 1] + "\u2026"
+        name = tk.Label(cell, text=text, bg=P.bg,
                         fg=P.fg if chosen else P.fg_dim, font=self.f_small)
-        name.pack(pady=(4, 0))
-        for widget in (cell, swatch, name):
+        name.place(x=0, y=29, relwidth=1)
+        return name
+
+    def make_theme_chip(self, parent, key, label):
+        """内置配色的格子"""
+        theme = THEMES[key]
+        chosen = (key == self.theme)
+        cell = self.theme_cell(parent)
+        swatch, dot = self.theme_swatch(cell, theme["bg"], theme["accent"],
+                                        chosen)
+        name = self.theme_name(cell, label, chosen)
+        for widget in (cell, swatch, dot, name):
             widget.bind("<Button-1>", lambda ev, k=key: self.choose_theme(k))
 
     def make_custom_theme_chip(self, parent, theme):
-        """自定义配色的色块 + 名字, 右键可以编辑或删除"""
+        """自定义配色的格子, 右键可以编辑或删除"""
         key = "custom:" + str(theme.get("id"))
         chosen = (key == self.theme)
-        cell = tk.Frame(parent, bg=P.bg, cursor="hand2")
-        cell.pack(side="left", padx=(0, 12))
-        border = P.fg if chosen else P.border
-        swatch = tk.Frame(cell, bg=theme.get("bg") or P.bg, width=38, height=24,
-                          highlightthickness=2 if chosen else 1,
-                          highlightbackground=border)
-        swatch.pack()
-        swatch.pack_propagate(False)
-        accent = tk.Frame(swatch, bg=theme.get("accent") or P.accent,
-                          width=12, height=12)
-        accent.place(x=13, y=6)
-        name = tk.Label(cell, text=theme.get("name") or "自定义", bg=P.bg,
-                        fg=P.fg if chosen else P.fg_dim, font=self.f_small)
-        name.pack(pady=(4, 0))
-        for widget in (cell, swatch, name):
+        cell = self.theme_cell(parent)
+        swatch, dot = self.theme_swatch(cell, theme.get("bg") or P.bg,
+                                        theme.get("accent") or P.accent,
+                                        chosen)
+        name = self.theme_name(cell, theme.get("name") or "自定义", chosen)
+        for widget in (cell, swatch, dot, name):
             widget.bind("<Button-1>", lambda ev, k=key: self.choose_theme(k))
             widget.bind("<Button-3>",
                         lambda ev, t=theme: self.popup_custom_theme(ev, t))
