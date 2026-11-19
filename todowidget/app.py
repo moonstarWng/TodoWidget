@@ -59,6 +59,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._fold_job = None
         self._animating = False
         self._frozen = []
+        self._title_job = None
+        self._title_target = None
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
         self.texture = self.conf.get("texture", "solid")
@@ -125,6 +127,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def build_ui(self):
         self.apply_palette_choice()
+        self.stop_title_fade()
         self._frozen = []
         r = self.root
         is_desktop = self.mode == "desktop"
@@ -157,6 +160,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         head.pack(fill="x", side="top")
         head.pack_propagate(False)
         self._head = head
+
+        # 顶栏底色画在画布上: 收起动画时每帧重画一遍, 擦掉按钮移动留下的残影
+        self.head_bg = tk.Canvas(head, bg=P.head, highlightthickness=0, bd=0)
+        self.head_bg.place(x=0, y=0, relwidth=1, relheight=1)
 
         self.list_dot = tk.Canvas(head, width=10, height=10, bg=P.head,
                                   highlightthickness=0, bd=0)
@@ -233,7 +240,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             if as_click and not moved and not self.collapsed:
                 self.open_list_menu(e)
 
-        for widget in (head, self.lbl_stat):
+        for widget in (head, self.head_bg, self.lbl_stat):
             widget.bind("<Button-1>", start_drag)
             widget.bind("<B1-Motion>", on_drag)
             widget.bind("<ButtonRelease-1>", lambda ev: end_drag(ev))
@@ -244,7 +251,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.lbl_title.bind("<B1-Motion>", on_drag)
         self.lbl_title.bind("<ButtonRelease-1>", lambda ev: end_drag(ev, True))
         self.lbl_title.bind("<Button-3>", self.popup_header)
-        head.bind("<Double-Button-1>", lambda e: self.toggle_collapse_all())
+        for widget in (head, self.head_bg):
+            widget.bind("<Double-Button-1>", lambda e: self.toggle_collapse_all())
 
         # ---- 列表 ----
         body = tk.Frame(inner, bg=P.bg)
@@ -414,15 +422,76 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             return None
 
-    def update_title(self):
-        """左上角标题: 收起时固定显示"待办清单", 展开时显示当前清单名"""
+    def title_text(self):
+        """当前该显示的标题文字和鼠标样式"""
         if self.collapsed:
-            self.lbl_title.config(text="待办清单", cursor="arrow")
-            return
+            return "待办清单", "arrow"
         name = self.store.current_name()
         if len(name) > 10:
             name = name[:9] + "\u2026"
-        self.lbl_title.config(text=name + "  \u25be", cursor="hand2")
+        return name + "  \u25be", "hand2"
+
+    def update_title(self):
+        """左上角标题: 收起时固定显示"待办清单", 展开时显示当前清单名"""
+        text, cursor = self.title_text()
+        self.lbl_title.config(cursor=cursor)
+        if self._title_job is not None:
+            # 正在淡出淡入, 让它到中间换字时再取最新文字
+            self._title_target = text
+            return
+        self._title_target = None
+        self.lbl_title.config(text=text, fg=P.fg)
+
+    def stop_title_fade(self):
+        """停掉还没跑完的标题淡化, 颜色恢复成正常"""
+        if self._title_job is not None:
+            try:
+                self.root.after_cancel(self._title_job)
+            except Exception:
+                pass
+            self._title_job = None
+        self._title_target = None
+        try:
+            self.lbl_title.config(fg=P.fg)
+        except Exception:
+            pass
+
+    def fade_title(self):
+        """标题先淡出, 换成当前该显示的文字, 再淡回来"""
+        text, cursor = self.title_text()
+        self.lbl_title.config(cursor=cursor)
+        self.stop_title_fade()
+        head = hex_to_rgb(P.head)
+        fg = hex_to_rgb(P.fg)
+        steps = 5
+        state = {"phase": "out", "step": 0}
+
+        def color(ratio):
+            parts = []
+            for i in range(3):
+                parts.append(int(round(fg[i] + (head[i] - fg[i]) * ratio)))
+            return "#{:02x}{:02x}{:02x}".format(*parts)
+
+        def tick():
+            state["step"] += 1
+            ratio = state["step"] / float(steps)
+            if state["phase"] == "out":
+                self.lbl_title.config(fg=color(ratio))
+                if state["step"] >= steps:
+                    state["phase"] = "in"
+                    state["step"] = 0
+                    self.lbl_title.config(text=self._title_target or text)
+            else:
+                self.lbl_title.config(fg=color(1.0 - ratio))
+                if state["step"] >= steps:
+                    self._title_job = None
+                    self._title_target = None
+                    self.lbl_title.config(fg=P.fg)
+                    return
+            self._title_job = self.root.after(16, tick)
+
+        self._title_target = text
+        tick()
 
     def set_tab(self, key):
         if key == self.tab:
@@ -457,13 +526,17 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def folded_width(self):
         """收起时横条要多宽: 按顶栏内容量出来, 不留一大片空白
 
-        统计文字("x 项未完成 · y 项已完成")收起时不显示, 也不计入宽度。
+        统计文字收起时不显示, 也不计入宽度; 标题按收起后固定的
+        "待办清单" 量, 免得按清单名量出过宽或过窄。
         """
         head = self._head
         head.update_idletasks()
         width = 0
         for child in head.winfo_children():
-            if child is self.lbl_stat:
+            if child is self.lbl_stat or child is self.head_bg:
+                continue
+            if child is self.lbl_title:
+                width += self.f_title.measure("待办清单")
                 continue
             width += child.winfo_reqwidth()
         # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
@@ -482,7 +555,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 on_done()
             return
         self.collapsed = bool(folded)
-        self.update_title()
+        if animate and self.mode == "desktop":
+            self.fade_title()
+        else:
+            self.update_title()
         # 动画期间窗口比较矮, 先放开正常的最小尺寸, 结束再恢复
         self.root.minsize(140, 42)
         start_w = max(1, self.root.winfo_width())
@@ -507,7 +583,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             if animate:
                 self.freeze_content()
             use_anim = animate and self.mode == "desktop"
-            animator = self.animate_fold if use_anim else None
+            animator = self.animate_collapse if use_anim else None
         else:
             self.restore_layout()
             self.btn_fold.config(text="\u25b4")
@@ -539,12 +615,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
         底栏和分隔线先占位, 列表最后 pack 去分剩下的空间, 免得被挤掉。
         """
+        self.attach_head()
         self.unfreeze_content()
         self._track.pack(fill="x", side="top")
         self._tabbar.pack(fill="x", side="top")
         self._foot.pack(fill="x", side="bottom")
         self._line.pack(fill="x", side="bottom")
         self._body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
+
+    def attach_head(self):
+        """把收起动画里单独摆的顶栏装回 pack"""
+        head = self._head
+        if head.winfo_manager() == "place":
+            head.place_forget()
+        if head.winfo_manager() != "pack":
+            head.pack(fill="x", side="top")
 
     def freeze_content(self):
         """把顶栏下面的部件按当前尺寸钉住
@@ -574,18 +659,35 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 pass
         self._frozen = []
 
-    def animate_fold(self, start_w, start_h, target_w, target_h, done):
-        """收起用: 真实窗口尺寸按缓出曲线变小, 顶栏跟着重排
+    def paint_head_bg(self, width=None):
+        """重画顶栏底色, 擦掉按钮移动后留在原地的残影
 
-        下面已钉住的部件不会每帧重排, 只是被窗口边缘裁掉。
+        :param width: 顶栏当前宽度; 不传就按实际宽度来
+        """
+        canvas = getattr(self, "head_bg", None)
+        if canvas is None:
+            return
+        w = width or canvas.winfo_width()
+        canvas.delete("all")
+        canvas.create_rectangle(0, 0, max(1, w), 40, fill=P.head, outline="")
 
-        :param start_w: 起始宽度
-        :param start_h: 起始高度
+    def animate_collapse(self, start_w, start_h, target_w, target_h, done):
+        """收起用: 窗口本身不动, 只按缓出曲线把显示区域缩上去
+
+        窗口尺寸一变 Tk 就整块重画, 会闪; 这里保持窗口大小, 只收显示区域,
+        顶栏宽度跟着显示区域走(图标平滑左移), 下面的内容钉住被边缘裁掉。
+
+        :param start_w: 起始可见宽度
+        :param start_h: 起始可见高度
         :param target_w: 目标宽度
         :param target_h: 目标高度
         :param done: 动画结束后的收尾函数
         """
         self.stop_fold_anim()
+        head = self._head
+        if head.winfo_manager() != "place":
+            head.pack_forget()
+            head.place(x=0, y=0, width=max(1, start_w - 2), height=40)
         steps = 14
         state = {"step": 0}
 
@@ -594,11 +696,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             ratio = state["step"] / float(steps)
             # 三次缓出: 起步快、收尾慢, 看着不生硬
             eased = 1.0 - (1.0 - ratio) ** 3
-            width = int(round(start_w + (target_w - start_w) * eased))
-            height = int(round(start_h + (target_h - start_h) * eased))
-            width = max(1, width)
-            height = max(1, height)
-            self.root.geometry("{}x{}".format(width, height))
+            width = max(1, int(round(start_w + (target_w - start_w) * eased)))
+            height = max(1, int(round(start_h + (target_h - start_h) * eased)))
+            head.place_configure(width=max(1, width - 2))
+            # 先把顶栏排好、重画底色, 再把显示区域收上来:
+            # 不然区域比顶栏窄一帧会切掉右边的按钮, 按钮移动还会留残影
+            head.update_idletasks()
+            self.paint_head_bg(max(1, width - 2))
             self.round_window(width, height)
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
@@ -657,7 +761,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def finish_collapse(self, width=None, height=None):
         """收起动画结束: 卸掉下面的内容, 只留顶栏
 
-        :param width: 收起后的宽度(动画最后一帧, 免得取到旧值)
+        :param width: 收起后的宽度(用动画最后一帧的值, 免得取到旧值)
         :param height: 收起后的高度
         """
         self.unfreeze_content()
@@ -665,6 +769,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                        self._foot, self._line):
             widget.pack_forget()
         self.lbl_stat.pack_forget()
+        if width and height:
+            self.root.geometry("{}x{}".format(width, height))
         self.root.minsize(140, 42)
         self.apply_resize_state()
         self.round_window(width, height)
@@ -1005,6 +1111,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.refresh()
 
     def quit(self):
+        self.stop_title_fade()
         self.save_geom()
         self.close_note()
         if self._tray is not None:
