@@ -71,6 +71,16 @@ class SettingsMixin:
         for key, label in TEXTURE_NAMES:
             self.make_texture_chip(texture_row, key, label)
 
+        tk.Label(body, text="窗口大小", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small).pack(anchor="w", padx=12, pady=(10, 4))
+        size_row = tk.Frame(body, bg=P.bg)
+        size_row.pack(fill="x", padx=12)
+        self.make_resize_chip(size_row, False, "自由调节")
+        self.make_resize_chip(size_row, True, "锁定")
+        tk.Label(body, text="自由调节时拖右下角斜纹改宽高", bg=P.bg,
+                 fg=P.fg_faint, font=self.f_small).pack(anchor="w", padx=12,
+                                                        pady=(4, 0))
+
         drag = {}
 
         def start_move(ev):
@@ -86,7 +96,7 @@ class SettingsMixin:
         head.bind("<Button-1>", start_move)
         head.bind("<B1-Motion>", do_move)
 
-        width, height = 262, 262
+        width, height = 262, 360
         if pos is None:
             right = self.root.winfo_rootx() + self.root.winfo_width()
             bottom = self.root.winfo_rooty() + self.root.winfo_height()
@@ -128,6 +138,31 @@ class SettingsMixin:
                         padx=12, pady=4, cursor="hand2")
         chip.pack(side="left", padx=(0, 8))
         chip.bind("<Button-1>", lambda ev: self.set_texture(key))
+
+    def make_resize_chip(self, parent, locked, label):
+        """窗口大小要不要锁住的切换按钮"""
+        chosen = (locked == bool(self.resize_locked))
+        if chosen:
+            bg = P.accent
+            fg = best_text_color(P.accent)
+        else:
+            bg = P.bg_alt
+            fg = P.fg_dim
+        chip = tk.Label(parent, text=label, bg=bg, fg=fg, font=self.f_small,
+                        padx=12, pady=4, cursor="hand2")
+        chip.pack(side="left", padx=(0, 8))
+        chip.bind("<Button-1>", lambda ev: self.choose_resize_mode(locked))
+
+    def choose_resize_mode(self, locked):
+        """在设置里切换自由调节 / 锁定, 切完重开设置窗口让选中态跟着变"""
+        if bool(locked) == bool(self.resize_locked):
+            return
+        pos = None
+        if self.settings_win is not None:
+            pos = (self.settings_win.winfo_x(), self.settings_win.winfo_y())
+        self.close_settings()
+        self.set_resize_locked(locked)
+        self.open_settings(pos)
 
     def set_texture(self, key):
         """切换质感并重建界面"""

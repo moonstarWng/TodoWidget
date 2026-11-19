@@ -53,6 +53,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._tray = None
         self.collapsed = False
         self._expanded_size = None
+        self.resize_locked = bool(self.conf.get("resize_locked", False))
+        self._resize_from = None
+        self._resizing = False
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
         self.texture = self.conf.get("texture", "solid")
@@ -90,7 +93,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.conf.update(mode=self.mode, topmost=self.topmost, alpha=self.alpha,
                          collapsed=bool(self.collapsed), tab=self.tab,
                          sort_mode=self.sort_mode, texture=self.texture,
-                         theme=self.theme, accent=self.accent)
+                         theme=self.theme, accent=self.accent,
+                         resize_locked=bool(self.resize_locked))
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
                 json.dump(self.conf, f, ensure_ascii=False, indent=1)
@@ -340,21 +344,40 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         flat_btn(foot, "折叠", lambda: self.collapse_all(True))
 
         tip_text = "按时间排序" if self.sort_mode == "time" else "双击便签 · 拖动排序"
+
+        # 右下角三道斜纹: 无边框窗口没有系统边框, 靠它拖宽高
+        self.grip = tk.Canvas(foot, width=14, height=14, bg=P.bg,
+                              highlightthickness=0, bd=0, cursor="sizing")
+        for offset in (4, 8, 12):
+            self.grip.create_line(14 - offset, 12, 12, 14 - offset,
+                                  fill=P.fg_faint)
+        self.grip.pack(side="right", padx=(0, 5), pady=(0, 3), anchor="s")
+        self.grip.bind("<ButtonPress-1>", self.start_resize)
+        self.grip.bind("<B1-Motion>", self.on_resize)
+        self.grip.bind("<ButtonRelease-1>", self.end_resize)
+
+        gear = tk.Label(foot, text="\u2699", bg=P.bg, fg=P.fg_faint,
+                        font=self.f_item, cursor="hand2", width=2)
+        gear.pack(side="right", padx=(0, 4))
+        gear.bind("<Button-1>", lambda e: self.open_settings())
+        gear.bind("<Enter>", lambda e, w=gear: w.configure(fg=P.fg))
+        gear.bind("<Leave>", lambda e, w=gear: w.configure(fg=P.fg_faint))
+        self._gear = gear
+
         self.tip = tk.Label(foot, text=tip_text, bg=P.bg,
                             fg=P.fg_faint, font=self.f_small)
         self.tip.pack(side="right", padx=(4, 2))
 
-        gear = tk.Label(foot, text="\u2699", bg=P.bg, fg=P.fg_faint,
-                        font=self.f_item, cursor="hand2", width=2)
-        gear.pack(side="right", padx=(0, 6))
-        gear.bind("<Button-1>", lambda e: self.open_settings())
-        gear.bind("<Enter>", lambda e, w=gear: w.configure(fg=P.fg))
-        gear.bind("<Leave>", lambda e, w=gear: w.configure(fg=P.fg_faint))
+        # 底栏和分隔线先占好位置, 列表最后 pack 去分剩下的空间,
+        # 不然窗口拖矮时列表会把底栏整个挤没
+        body.pack_forget()
+        body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
 
         r.bind("<FocusOut>", self.on_focus_out)
         r.bind("<Button-1>", self.on_any_click, add="+")
         r.bind("<Configure>", self.on_win_configure, add="+")
         r.bind("<Control-q>", lambda e: self.quit())
+        self.apply_resize_state()
 
     def make_box(self, checked, size=16):
         """画一个勾选框小图标 (圆角方框, 勾在框里)"""
@@ -417,8 +440,24 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def toggle_fold(self):
         self.set_folded(not self.collapsed)
 
+    def folded_width(self):
+        """收起时横条要多宽: 按顶栏内容量出来, 不留一大片空白
+
+        统计文字("x 项未完成 · y 项已完成")收起时不显示, 也不计入宽度。
+        """
+        head = self._head
+        head.update_idletasks()
+        width = 0
+        for child in head.winfo_children():
+            if child is self.lbl_stat:
+                continue
+            width += child.winfo_reqwidth()
+        # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
+        width += 14 + 2 + 8 + 3 * 4 + 4
+        return max(140, width)
+
     def set_folded(self, folded):
-        """右上角折叠: 只留一条横杠"""
+        """右上角折叠: 只留一条窄横条"""
         if folded == self.collapsed:
             return
         self.collapsed = bool(folded)
@@ -434,20 +473,106 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             for w in (self._track, self._tabbar, self._body, self._foot, self._line):
                 w.pack_forget()
             self.btn_fold.config(text="\u25be")
-            w = max(220, self.root.winfo_width())
-            self.root.minsize(220, 42)
-            self.root.geometry("{}x{}".format(w, 42))
+            # 收起后不看统计, 把这一行也去掉, 横条才能缩窄
+            self.lbl_stat.pack_forget()
+            self.root.minsize(140, 42)
+            self.root.geometry("{}x{}".format(self.folded_width(), 42))
         else:
             self._track.pack(fill="x", side="top")
             self._tabbar.pack(fill="x", side="top")
-            self._body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
             self._foot.pack(fill="x", side="bottom")
             self._line.pack(fill="x", side="bottom")
+            self._body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
+            self.lbl_stat.pack(side="left", pady=(3, 0), after=self.lbl_title)
             self.btn_fold.config(text="\u25b4")
             self.root.minsize(270, 220)
             w, h = self._expanded_size or (330, 460)
             self.root.geometry("{}x{}".format(w, h))
+        self.apply_resize_state()
         self.save_conf()
+
+    # ---------------- 拖右下角改宽高 ----------------
+
+    def start_resize(self, e):
+        """按下右下角斜纹: 记下起点和当前宽高"""
+        if self.resize_locked or self.collapsed:
+            return
+        self._resize_from = (e.x_root, e.y_root,
+                             self.root.winfo_width(), self.root.winfo_height())
+        self._resizing = True
+
+    def on_resize(self, e):
+        """按住斜纹拖动: 按位移同时改宽和高"""
+        if not self._resize_from:
+            return
+        x0, y0, w0, h0 = self._resize_from
+        width = max(270, w0 + (e.x_root - x0))
+        height = max(220, h0 + (e.y_root - y0))
+        self.root.geometry("{}x{}".format(width, height))
+
+    def end_resize(self, e):
+        """松手: 把新的宽高记进配置"""
+        if not self._resize_from:
+            return
+        self._resize_from = None
+        self._resizing = False
+        self.save_geom()
+
+    def toggle_resize_lock(self):
+        """右键顶栏 / 托盘: 锁住或解开自由调节宽高"""
+        self.set_resize_locked(not self.resize_locked)
+
+    def set_resize_locked(self, locked):
+        """锁住后右下角斜纹收起, 普通窗口模式也不能拖系统边框"""
+        locked = bool(locked)
+        if locked == self.resize_locked:
+            return
+        self.resize_locked = locked
+        self.save_conf()
+        self.apply_resize_state()
+
+    def apply_resize_state(self):
+        """按锁定 / 折叠 / 窗口模式 决定要不要显示右下角调节柄"""
+        locked = bool(getattr(self, "resize_locked", False))
+        native = self.mode == "window"
+        try:
+            self.root.resizable(native and not locked, native and not locked)
+        except Exception:
+            pass
+        grip = getattr(self, "grip", None)
+        if grip is None:
+            return
+        show = (self.mode == "desktop" and not locked and not self.collapsed)
+        shown = bool(grip.winfo_manager())
+        if show and not shown:
+            anchor = getattr(self, "_gear", grip)
+            grip.pack(side="right", padx=(0, 5), pady=(0, 3), anchor="s",
+                      before=anchor)
+        elif not show and shown:
+            grip.pack_forget()
+
+    def fit_width(self, width):
+        """窗口拖窄时先收起次要文字, 别把折叠、齿轮这些要紧的挤掉"""
+        narrow = width < 300 or bool(getattr(self, "collapsed", False))
+        tip = getattr(self, "tip", None)
+        if tip is not None:
+            shown = bool(tip.winfo_manager())
+            if narrow and shown:
+                tip.pack_forget()
+            elif not narrow and not shown:
+                anchor = getattr(self, "_gear", None)
+                options = {"side": "right", "padx": (4, 2)}
+                if anchor is not None:
+                    options["after"] = anchor
+                tip.pack(**options)
+        stat = getattr(self, "lbl_stat", None)
+        if stat is None:
+            return
+        shown = bool(stat.winfo_manager())
+        if narrow and shown:
+            stat.pack_forget()
+        elif not narrow and not shown:
+            stat.pack(side="left", pady=(3, 0), after=self.lbl_title)
 
     def on_win_configure(self, e):
         if e.widget is not self.root:
@@ -455,6 +580,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if getattr(self, "_win_size", None) == (e.width, e.height):
             return
         self._win_size = (e.width, e.height)
+        self.fit_width(e.width)
         self.root.after(15, self.round_window)
 
     def round_window(self):
@@ -500,6 +626,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         m.add_separator()
         m.add_checkbutton(label="总在最前", command=self.toggle_topmost,
                           variable=tk.BooleanVar(value=self.topmost))
+        m.add_checkbutton(label="锁定窗口大小", command=self.toggle_resize_lock,
+                          variable=tk.BooleanVar(value=self.resize_locked))
         m.add_command(label="退出", command=self.quit)
         m.tk_popup(e.x_root, e.y_root)
 
@@ -524,6 +652,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             r.geometry("330x460+{}+{}".format(sw - 370, max(70, sh // 10)))
         r.deiconify()
         r.lift()
+        self.apply_resize_state()
         if glass:
             r.after(80, lambda: enable_acrylic(r))
         else:
@@ -601,6 +730,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def maybe_sink(self):
         if self.mode != "desktop" or self.topmost or self._dragging:
             return
+        if getattr(self, "_resizing", False):
+            return
         try:
             if self.root.focus_get() is None:
                 self.sink()
@@ -647,6 +778,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                              checked=lambda i: self.mode == "window", radio=True),
             pystray.MenuItem("总在最前", lambda: self.call(self.toggle_topmost),
                              checked=lambda i: self.topmost),
+            pystray.MenuItem("锁定窗口大小",
+                             lambda: self.call(self.toggle_resize_lock),
+                             checked=lambda i: self.resize_locked),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("新建任务", lambda: self.call(self.show_and_add)),
             pystray.MenuItem("打开数据文件", lambda: self.call(os.startfile, self.store.path)),

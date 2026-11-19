@@ -151,6 +151,47 @@ def run_selftest():
     expanded = sum(1 for iid in app._refs if app.tree.bbox(iid))
     check("全部展开生效", expanded == total)
 
+    # 收起成窄横条: 宽度按顶栏内容算, 统计文字不再显示
+    app.mode = "desktop"
+    before_w = root.winfo_width()
+    app.set_folded(True)
+    settle()
+    folded_w = root.winfo_width()
+    stat_hidden = not app.lbl_stat.winfo_manager()
+    check("收起后横条变窄", folded_w < before_w and folded_w <= 220)
+    check("收起后不显示统计文字", stat_hidden)
+    app.set_folded(False)
+    settle()
+    check("展开后宽高恢复", root.winfo_width() >= 270
+          and bool(app.lbl_stat.winfo_manager()))
+
+    # 右下角调节柄: 解开时有, 锁住后消失
+    app.set_resize_locked(False)
+    settle()
+    grip_free = bool(app.grip.winfo_manager())
+    app.set_resize_locked(True)
+    settle()
+    grip_locked = bool(app.grip.winfo_manager())
+    check("自由调节 / 锁定窗口大小切换", grip_free and not grip_locked)
+    app.set_resize_locked(False)
+    settle()
+
+    # 模拟拖右下角: 宽高都要变大 (不碰真实鼠标)
+    w0, h0 = root.winfo_width(), root.winfo_height()
+    app.start_resize(FakeEvent(app.grip, 0, 0))
+    app.on_resize(FakeEvent(app.grip, 50, 40))
+    settle()
+    grew = root.winfo_width() > w0 and root.winfo_height() > h0
+    app.end_resize(FakeEvent(app.grip, 0, 0))
+    check("拖右下角可以改宽高", grew)
+
+    # 窗口缩到最小也要能看见底栏, 不能被列表挤出去
+    root.geometry("270x260")
+    settle()
+    check("窗口缩小时底栏还在", bool(app._foot.winfo_ismapped()))
+    root.geometry("330x460")
+    settle()
+
     app.set_tab("done")
     settle()
     wrong = []
