@@ -18,8 +18,8 @@ except Exception:
 from .paths import APP_DIR, CONF_FILE
 from .store import Store
 from . import theme as T
-from .theme import (P, apply_palette, custom_scheme, hex_to_rgb, mix_color,
-                    pick_font, set_theme)
+from .theme import (P, GRADIENTS, apply_palette, custom_scheme, hex_to_rgb,
+                    mix_color, pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
 
 if HAS_TRAY:
@@ -28,6 +28,9 @@ from .ui_list import ListViewMixin
 from .ui_lists import ListMenuMixin
 from .ui_note import NoteMixin
 from .ui_settings import SettingsMixin
+
+# 色键透明用的颜色: 主窗口里刷成这个色的地方会被当成透明
+SKIN_KEY = "#010203"
 
 
 class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
@@ -66,6 +69,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_size = None
         self._skin_region_size = None
         self._skin_crop_job = None
+        self._skin_target = None
         self._skin_source = None
         self._skin_source_path = None
         self._fold_job = None
@@ -136,6 +140,16 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     # ---------------- 界面 ----------------
 
+    def gradient_theme(self, key=None):
+        """按 key 找一份内置渐变配色; 不传就找当前用的
+
+        :param key: 主题键, 形如 'gradient:deep_sea'
+        """
+        key = key or self.theme
+        if not str(key).startswith("gradient:"):
+            return None
+        return GRADIENTS.get(str(key)[len("gradient:"):])
+
     def custom_theme(self, key=None):
         """按 key 找一份自定义配色; 不传就找当前用的"""
         key = key or self.theme
@@ -161,12 +175,19 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         """按当前主题和质感选一套配色"""
         self._theme_image = ""
         custom = self.custom_theme()
-        if custom is not None:
+        grad = self.gradient_theme()
+        if grad is not None:
+            mid = mix_color(grad.get("start") or "#17181d",
+                            grad.get("end") or "#2a2a40", 0.5)
+            apply_palette(custom_scheme(mid, grad.get("accent") or "#5b9cff",
+                                        grad.get("fg") or None))
+        elif custom is not None:
             bg = custom.get("bg") or "#17181d"
             if (custom.get("mode") or "") == "gradient":
                 bg = mix_color(custom.get("grad_start") or bg,
                                custom.get("grad_end") or bg, 0.5)
-            apply_palette(custom_scheme(bg, custom.get("accent") or "#5b9cff"))
+            apply_palette(custom_scheme(bg, custom.get("accent") or "#5b9cff",
+                                        custom.get("fg") or None))
             self._theme_image = custom.get("image") or ""
         else:
             set_theme(self.theme, self.accent)
@@ -455,6 +476,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.bind("<Control-q>", lambda e: self.quit())
         self.set_window_icon()
         self.apply_resize_state()
+        if self.skin_spec() is not None:
+            self.apply_skin_key()
         # 重建界面后按当前宽度再摆一次, 免得统计/提示停在旧状态
         self._win_size = None
         self.fit_width(self.root.winfo_width())
@@ -608,10 +631,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 fg=pending_color if self.tab == "pending" else P.fg_dim)
             self.tab_labels["done"].config(
                 fg=done_color if self.tab == "done" else P.fg_dim)
+            empty = SKIN_KEY if self.skin_spec() is not None else P.bg
             self.tab_bars["pending"].config(
-                bg=pending_color if self.tab == "pending" else P.bg)
+                bg=pending_color if self.tab == "pending" else empty)
             self.tab_bars["done"].config(
-                bg=done_color if self.tab == "done" else P.bg)
+                bg=done_color if self.tab == "done" else empty)
         except Exception:
             pass
 
@@ -769,7 +793,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         w = width or canvas.winfo_width()
         canvas.delete("all")
-        canvas.create_rectangle(0, 0, max(1, w), 40, fill=P.head, outline="")
+        fill = SKIN_KEY if self.skin_spec() is not None else P.head
+        canvas.create_rectangle(0, 0, max(1, w), 40, fill=fill, outline="")
 
     def animate_collapse(self, start_w, start_h, target_w, target_h, done):
         """收起用: 窗口本身不动, 只按缓出曲线把显示区域缩上去
@@ -1037,9 +1062,16 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     # ---------------- 图片皮肤 ----------------
 
     def skin_spec(self):
-        """当前是不是图片/渐变皮肤; 是的话返回那份自定义配色"""
+        """当前是不是图片/渐变皮肤; 是的话返回一份皮肤说明"""
         if not HAS_TRAY:
             return None
+        grad = self.gradient_theme()
+        if grad is not None:
+            return {"mode": "gradient",
+                    "grad_start": grad.get("start") or "#17181d",
+                    "grad_end": grad.get("end") or "#2a2a40",
+                    "grad_angle": grad.get("angle") or "vertical",
+                    "alpha": float(grad.get("alpha") or 0.0)}
         custom = self.custom_theme()
         if custom is None:
             return None
@@ -1162,7 +1194,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.skin_win = win
             self.skin_label = label
             self._skin_size = None
-            self.skin_click_through()
+            self.skin_quiet()
+            self.skin_bind_events()
         self.reload_skin_image()
         try:
             self.skin_win.deiconify()
@@ -1190,17 +1223,125 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             except Exception:
                 pass
 
-    def skin_click_through(self):
-        """皮肤窗口只负责显示, 不接收点击、不抢焦点、不进 Alt+Tab"""
+    def skin_quiet(self):
+        """皮肤窗口不抢焦点、不进 Alt+Tab, 但要能收到鼠标事件用来转发"""
         try:
             user32 = ctypes.windll.user32
             hwnd = self.skin_hwnd()
             gwl_exstyle = -20
             style = user32.GetWindowLongPtrW(hwnd, gwl_exstyle)
-            style |= 0x00000020      # WS_EX_TRANSPARENT
             style |= 0x08000000      # WS_EX_NOACTIVATE
             style |= 0x00000080      # WS_EX_TOOLWINDOW
             user32.SetWindowLongPtrW(hwnd, gwl_exstyle, style)
+        except Exception:
+            pass
+
+    def skin_bind_events(self):
+        """皮肤窗口上的鼠标事件都转给主窗口里对应的控件
+
+        背景是色键透明的, 空白处点击会落到皮肤窗口上, 不转发的话点不动。
+        """
+        win = self.skin_win
+        if win is None:
+            return
+        sequences = ("<Button-1>", "<B1-Motion>", "<ButtonRelease-1>",
+                     "<Button-3>", "<Motion>", "<MouseWheel>")
+        for sequence in sequences:
+            win.bind(sequence,
+                     lambda ev, seq=sequence: self.forward_skin_event(ev, seq),
+                     add="+")
+
+    def skin_widget_at(self, x, y):
+        """按坐标找主窗口里最上层的控件 (x, y 相对主窗口)
+
+        :param x: 相对主窗口的横坐标
+        :param y: 相对主窗口的纵坐标
+        """
+        def walk(widget, local_x, local_y):
+            for child in reversed(widget.winfo_children()):
+                try:
+                    if not child.winfo_ismapped():
+                        continue
+                    cx, cy = child.winfo_x(), child.winfo_y()
+                    cw, ch = child.winfo_width(), child.winfo_height()
+                except Exception:
+                    continue
+                if cx <= local_x < cx + cw and cy <= local_y < cy + ch:
+                    found = walk(child, local_x - cx, local_y - cy)
+                    return found if found is not None else child
+            return None
+
+        found = walk(self.root, x, y)
+        return found if found is not None else self.root
+
+    def forward_skin_event(self, event, sequence):
+        """把皮肤窗口收到的鼠标事件转给主窗口里的控件
+
+        :param event: 皮肤窗口上的 Tk 事件
+        :param sequence: 要转发的绑定序列
+        """
+        root = self.root
+        try:
+            x = event.x_root - root.winfo_rootx()
+            y = event.y_root - root.winfo_rooty()
+            inside = (0 <= x < root.winfo_width()
+                      and 0 <= y < root.winfo_height())
+            if sequence in ("<B1-Motion>", "<ButtonRelease-1>"):
+                # 拖动沿用按下时的控件, 拖出窗口也别断
+                target = self._skin_target
+            elif not inside:
+                return
+            else:
+                target = self.skin_widget_at(x, y)
+            if sequence == "<Button-1>":
+                self._skin_target = target
+            if target is None:
+                return
+            local_x = x - (target.winfo_rootx() - root.winfo_rootx())
+            local_y = y - (target.winfo_rooty() - root.winfo_rooty())
+            options = {"x": local_x, "y": local_y,
+                       "rootx": event.x_root, "rooty": event.y_root}
+            delta = getattr(event, "delta", 0)
+            if delta:
+                options["delta"] = delta
+            target.event_generate(sequence, **options)
+            if sequence == "<ButtonRelease-1>":
+                self._skin_target = None
+        except Exception:
+            pass
+
+    def apply_skin_key(self):
+        """把主窗口里的纯色底换成透明色, 让底图从底下透出来
+
+        只改底色, 文字/图标保持不透明。
+        """
+        key = SKIN_KEY
+        for widget in (self.inner, self.card):
+            try:
+                widget.configure(bg=key)
+            except Exception:
+                pass
+
+        def recolor(widget):
+            for child in widget.winfo_children():
+                try:
+                    background = child.cget("bg")
+                except Exception:
+                    background = None
+                if background in (P.bg, P.head, P.group_bg):
+                    try:
+                        child.configure(bg=key)
+                    except Exception:
+                        pass
+                recolor(child)
+
+        recolor(self.card)
+        self.paint_head_bg()
+        try:
+            style = ttk.Style(self.root)
+            style.configure("Todo.Treeview", background=key,
+                            fieldbackground=key)
+            style.configure("Todo.Vertical.TScrollbar", troughcolor=key)
         except Exception:
             pass
 
@@ -1222,6 +1363,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             image = self.skin_base_image(spec, width, height)
             if image is None:
                 return
+            # “透明度”是把底图往底色里混, 0% 就是原图满色
+            strength = float(spec.get("alpha") or 0.0)
+            strength = max(0.0, min(0.6, strength))
+            if strength > 0:
+                from PIL import Image
+                base = Image.new("RGB", image.size, hex_to_rgb(P.bg))
+                image = Image.blend(image, base, strength)
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
@@ -1374,14 +1522,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.overrideredirect(self.mode == "desktop")
         skin = self.skin_spec()
         alpha = float(self.alpha)
-        if skin is not None:
-            # 图片皮肤: 主窗口半透明, 让后面的图透出来
-            strength = float(skin.get("alpha") or 0.2)
-            strength = max(0.05, min(0.45, strength))
-            alpha = alpha * (1.0 - strength)
         try:
             r.attributes("-topmost", bool(self.topmost))
             r.attributes("-alpha", alpha)
+            if skin is not None:
+                # 背景色键透明, 文字保持不透明
+                r.attributes("-transparentcolor", SKIN_KEY)
+            else:
+                r.attributes("-transparentcolor", "")
         except Exception:
             pass
         geom = self.conf.get("geom")

@@ -18,7 +18,8 @@ except Exception:
 
 from . import updater
 from .paths import APP_DIR
-from .theme import P, THEMES, THEME_NAMES, best_text_color, set_theme
+from .theme import (P, GRADIENTS, THEMES, THEME_NAMES, auto_text_color,
+                    best_text_color, mix_color, set_theme)
 from .utils import make_icon, round_corners
 
 # 设置窗口里各分类
@@ -332,6 +333,17 @@ class SettingsMixin:
         add.bind("<Enter>", lambda ev, w=add: w.configure(bg=P.hover))
         add.bind("<Leave>", lambda ev, w=add: w.configure(bg=P.bg_alt))
 
+        holder = self.settings_block(
+            panel, "渐变配色", "点一下换，右键可以复制成自己的配色")
+        grid = tk.Frame(holder, bg=P.bg)
+        grid.pack(fill="x")
+        row = None
+        for index, key in enumerate(GRADIENTS):
+            if index % 4 == 0:
+                row = tk.Frame(grid, bg=P.bg)
+                row.pack(fill="x", pady=(0, 6))
+            self.make_gradient_chip(row, key, GRADIENTS[key])
+
         holder = self.settings_block(panel, "强调色",
                                      "勾选框、进度条、选中项会跟着变")
         row = tk.Frame(holder, bg=P.bg, cursor="hand2")
@@ -398,6 +410,81 @@ class SettingsMixin:
         name = self.theme_name(cell, label, chosen)
         for widget in (cell, swatch, dot, name):
             widget.bind("<Button-1>", lambda ev, k=key: self.choose_theme(k))
+            widget.bind("<Button-3>",
+                        lambda ev, k=key: self.popup_builtin_theme(ev, "solid", k))
+
+    def make_gradient_chip(self, parent, key, spec):
+        """内置渐变配色的格子"""
+        full_key = "gradient:" + key
+        chosen = (self.theme == full_key)
+        cell = self.theme_cell(parent)
+        canvas = tk.Canvas(cell, width=38, height=24, bd=0,
+                           bg=spec["start"], highlightthickness=2 if chosen else 1,
+                           highlightbackground=P.fg if chosen else P.border)
+        canvas.place(relx=0.5, y=0, anchor="n")
+        start, end = spec["start"], spec["end"]
+        angle = spec.get("angle") or "vertical"
+        if angle == "horizontal":
+            for x in range(38):
+                color = mix_color(start, end, x / 37.0)
+                canvas.create_line(x, 0, x, 24, fill=color)
+        elif angle == "diagonal":
+            for offset in range(-24, 62):
+                color = mix_color(start, end, (offset + 24) / 86.0)
+                canvas.create_line(offset, 0, offset + 24, 24, fill=color)
+        else:
+            for y in range(24):
+                color = mix_color(start, end, y / 23.0)
+                canvas.create_line(0, y, 38, y, fill=color)
+        name = self.theme_name(cell, spec.get("name") or key, chosen)
+        for widget in (cell, canvas, name):
+            widget.bind("<Button-1>",
+                        lambda ev, k=full_key: self.choose_theme(k))
+            widget.bind("<Button-3>",
+                        lambda ev, k=key: self.popup_builtin_theme(ev, "gradient", k))
+
+    def popup_builtin_theme(self, event, kind, key):
+        """右键内置配色: 只能复制, 不能删"""
+        menu = tk.Menu(self.root, tearoff=0)
+        menu.add_command(label="复制为自定义配色…",
+                         command=lambda: self.copy_theme(kind, key))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def copy_theme(self, kind, key):
+        """把内置配色复制一份出来做自定义
+
+        :param kind: 'solid' 或 'gradient'
+        :param key: 配色键
+        """
+        base = {"image": "", "zoom": 1.0, "offset": [0.0, 0.0],
+                "grad_angle": "vertical", "alpha": 0.0}
+        if kind == "gradient":
+            spec = GRADIENTS[key]
+            seed = dict(base)
+            seed.update(name=spec["name"] + " 副本", mode="gradient",
+                        bg=mix_color(spec["start"], spec["end"], 0.5),
+                        accent=spec["accent"], fg=spec["fg"],
+                        grad_start=spec["start"], grad_end=spec["end"],
+                        grad_angle=spec.get("angle") or "vertical")
+        else:
+            scheme = THEMES[key]
+            label = dict(THEME_NAMES).get(key, key)
+            seed = dict(base)
+            seed.update(name=label + " 副本", mode="solid",
+                        bg=scheme["bg"], accent=scheme["accent"],
+                        fg=scheme["fg"])
+        self.open_theme_editor(seed)
+
+    def copy_custom_theme(self, theme):
+        """把一份自定义配色复制一份"""
+        seed = dict(theme)
+        seed.pop("id", None)
+        seed.pop("_pil", None)
+        seed["name"] = (seed.get("name") or "自定义") + " 副本"
+        self.open_theme_editor(seed)
 
     def make_custom_theme_chip(self, parent, theme):
         """自定义配色的格子, 右键可以编辑或删除"""
@@ -421,6 +508,8 @@ class SettingsMixin:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="编辑配色…",
                          command=lambda: self.open_theme_editor(theme))
+        menu.add_command(label="复制一份",
+                         command=lambda: self.copy_custom_theme(theme))
         menu.add_command(label="删除配色",
                          command=lambda: self.delete_custom_theme(theme))
         try:
@@ -466,8 +555,6 @@ class SettingsMixin:
         self.close_settings()
         self.theme = key
         self.accent = None
-        if self.custom_theme(key) is None:
-            set_theme(key, None)
         self.save_conf()
         self.reload_ui()
         self.open_settings(pos)
@@ -517,10 +604,11 @@ class SettingsMixin:
             "mode": mode,
             "zoom": float(existing.get("zoom") or 1.0),
             "offset": list(existing.get("offset") or [0.0, 0.0]),
-            "alpha": float(existing.get("alpha") or 0.2),
+            "alpha": float(existing.get("alpha") or 0.0),
             "grad_start": existing.get("grad_start") or "#1b2030",
             "grad_end": existing.get("grad_end") or "#3a2a52",
             "grad_angle": existing.get("grad_angle") or "vertical",
+            "fg": existing.get("fg") or "",
         }
 
         win = tk.Toplevel(self.settings_win or self.root)
@@ -535,7 +623,14 @@ class SettingsMixin:
         head = tk.Frame(body, bg=P.head, height=38)
         head.pack(fill="x")
         head.pack_propagate(False)
-        title = "编辑配色" if theme else "新建配色"
+        editing = theme is not None and any(t is theme
+                                            for t in self.custom_themes)
+        if editing:
+            title = "编辑配色"
+        elif theme:
+            title = "复制配色"
+        else:
+            title = "新建配色"
         tk.Label(head, text=title, bg=P.head, fg=P.fg,
                  font=self.f_group).pack(side="left", padx=14)
         close = tk.Label(head, text="\u2715", bg=P.head, fg=P.fg_dim,
@@ -681,7 +776,7 @@ class SettingsMixin:
         zoom_value.pack(side="left", padx=8)
 
         alpha_row = row(form, "透明度", width=6)
-        alpha_scale = tk.Scale(alpha_row, from_=5, to=45, resolution=5,
+        alpha_scale = tk.Scale(alpha_row, from_=0, to=60, resolution=5,
                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
                                troughcolor=P.bg_alt, highlightthickness=0, bd=0,
                                sliderrelief="flat", showvalue=False, length=220,
@@ -692,6 +787,22 @@ class SettingsMixin:
                                bg=P.bg, fg=P.fg_faint, font=self.f_small)
         alpha_value.pack(side="left", padx=8)
         alpha_row.pack_forget()
+
+        fg_row = row(form, "文字色")
+        fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(state["bg"]),
+                             width=36, height=22, highlightthickness=1,
+                             highlightbackground=P.border)
+        fg_swatch.pack(side="left")
+        fg_swatch.pack_propagate(False)
+        fg_btn = tk.Label(fg_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
+                          font=self.f_small, padx=10, pady=2, cursor="hand2")
+        fg_btn.pack(side="left", padx=8)
+        fg_btn.bind("<Button-1>", lambda ev: pick_fg())
+        fg_auto_btn = tk.Label(fg_row, text="自动", bg=P.bg, fg=P.fg_faint,
+                               font=self.f_small, padx=6, pady=2, cursor="hand2")
+        fg_auto_btn.pack(side="left")
+        fg_auto_btn.bind("<Button-1>", lambda ev: reset_fg())
+        fg_row.pack_forget()
 
         accent_row = row(form, "强调色")
         accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
@@ -706,8 +817,10 @@ class SettingsMixin:
         accent_btn.bind("<Button-1>", lambda ev: pick_accent())
 
         note = self.settings_note(
-            body, "渐变 / 图片模式：底图铺满整个窗口，主界面整体半透明，底图从底下透出来；"
-                  "图片模式的预览里拖动挪位置、滚轮缩放，比例跟实际窗口一致。")
+            body, "渐变 / 图片模式：底图铺满整个窗口，文字保持不透明。"
+                  "「透明度」是把底图往底色里混，0% 就是原图满色。"
+                  "文字色不选就按底色自动配，「自动」按钮可以恢复。"
+                  "图片模式可以在预览里拖动挪位置、滚轮缩放，比例跟实际窗口一致。")
         note.pack(fill="x", padx=18, pady=(8, 0))
 
         def pick_bg():
@@ -716,6 +829,20 @@ class SettingsMixin:
             if picked:
                 state["bg"] = picked
                 bg_swatch.configure(bg=picked)
+                if not state["fg"]:
+                    fg_swatch.configure(bg=auto_text_color(picked))
+
+        def pick_fg():
+            _, picked = colorchooser.askcolor(
+                color=state["fg"] or auto_text_color(state["bg"]), parent=win,
+                title="选择文字颜色")
+            if picked:
+                state["fg"] = picked
+                fg_swatch.configure(bg=picked)
+
+        def reset_fg():
+            state["fg"] = ""
+            fg_swatch.configure(bg=auto_text_color(state["bg"]))
 
         def pick_accent():
             _, picked = colorchooser.askcolor(color=state["accent"], parent=win,
@@ -784,18 +911,20 @@ class SettingsMixin:
             gradient_frame.pack_forget()
             image_frame.pack_forget()
             alpha_row.pack_forget()
+            fg_row.pack_forget()
             if key == "image":
                 image_frame.pack(fill="x", before=accent_row)
                 alpha_row.pack(fill="x", before=accent_row)
-                resize_window(640)
+                resize_window(680)
                 render_preview()
             elif key == "gradient":
                 gradient_frame.pack(fill="x", before=accent_row)
                 alpha_row.pack(fill="x", before=accent_row)
-                resize_window(420)
+                resize_window(460)
             else:
                 solid_frame.pack(fill="x", before=accent_row)
-                resize_window(360)
+                resize_window(396)
+            fg_row.pack(fill="x", before=accent_row)
 
         def resize_window(height):
             """按模式把编辑框调高/调矮, 别留一大片空白"""
@@ -813,7 +942,7 @@ class SettingsMixin:
             render_preview()
 
         def set_alpha(value):
-            state["alpha"] = max(0.05, min(0.45, float(value) / 100.0))
+            state["alpha"] = max(0.0, min(0.6, float(value) / 100.0))
             alpha_value.config(
                 text="{}%".format(int(round(state["alpha"] * 100))))
 
@@ -914,7 +1043,7 @@ class SettingsMixin:
         set_mode(state["mode"])
         render_preview()
 
-        sizes = {"solid": 360, "gradient": 420, "image": 640}
+        sizes = {"solid": 396, "gradient": 460, "image": 680}
         width, height = 470, sizes.get(state["mode"], 360)
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
@@ -959,15 +1088,20 @@ class SettingsMixin:
         if theme is None:
             theme = {"id": uuid.uuid4().hex[:8]}
             self.custom_themes.append(theme)
+        elif not any(item is theme for item in self.custom_themes):
+            # 复制出来的草稿, 保存时当成新的一份
+            theme["id"] = uuid.uuid4().hex[:8]
+            self.custom_themes.append(theme)
         theme.update(name=name, bg=state["bg"], accent=state["accent"],
                      image=state["image"], mode=state.get("mode", "solid"),
+                     fg=state.get("fg") or "",
                      grad_start=state.get("grad_start") or "#1b2030",
                      grad_end=state.get("grad_end") or "#2a2a40",
                      grad_angle=state.get("grad_angle") or "vertical",
                      zoom=round(float(state.get("zoom") or 1.0), 3),
                      offset=[round(float(state.get("offset", [0.0, 0.0])[0]), 3),
                              round(float(state.get("offset", [0.0, 0.0])[1]), 3)],
-                     alpha=round(float(state.get("alpha") or 0.25), 3))
+                     alpha=round(float(state.get("alpha") or 0.0), 3))
         self.theme = "custom:" + theme["id"]
         self.accent = None
         self.save_conf()

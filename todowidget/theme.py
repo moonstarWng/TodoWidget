@@ -109,6 +109,26 @@ THEMES = {
         group="#ffffff", sel="#49483e"),
 }
 
+# 内置渐变配色: start/end 渐变两端, angle 方向, accent 强调色, fg 文字色
+GRADIENTS = {
+    "deep_sea": dict(name="深海", start="#12233f", end="#2b1d4a",
+                     angle="diagonal", accent="#5b9cff", fg="#dbe6ff"),
+    "sunset": dict(name="日落", start="#3a1c3f", end="#b8452f",
+                   angle="vertical", accent="#ffb35c", fg="#ffe3cf"),
+    "forest": dict(name="晨雾", start="#10251f", end="#2f4f3a",
+                   angle="diagonal", accent="#4fd39a", fg="#d6f0e2"),
+    "midnight": dict(name="午夜蓝", start="#0f141c", end="#262f3d",
+                     angle="vertical", accent="#7aa2f7", fg="#e6ecf7"),
+    "sakura": dict(name="樱花", start="#3a1e2b", end="#7a3b52",
+                   angle="horizontal", accent="#ff9ec4", fg="#ffe6f0"),
+    "aurora": dict(name="极光", start="#0b1f2a", end="#123a3f",
+                   angle="diagonal", accent="#4ee0c8", fg="#d9f7f2"),
+    "amber": dict(name="琥珀", start="#241a10", end="#4a2c12",
+                  angle="vertical", accent="#ffc46b", fg="#ffeed6"),
+    "dusk": dict(name="暮色", start="#1a1a22", end="#2e2a3d",
+                 angle="diagonal", accent="#a58cff", fg="#e8e4ff"),
+}
+
 THEME_NAMES = (("dark", "深色"), ("light", "浅色"),
                ("forest", "墨绿"), ("sand", "暖沙"),
                ("nord", "Nord"), ("dracula", "Dracula"),
@@ -188,18 +208,30 @@ def brightness(color):
     return (red * 299 + green * 587 + blue * 114) / 1000.0
 
 
-def custom_scheme(bg, accent):
-    """从一个底色 + 一个强调色推出一整套配色
+def auto_text_color(bg):
+    """按底色自动挑一个文字颜色
 
-    只让用户挑两个颜色, 其余的(文字、边框、悬停、选中)按深浅自动配,
-    省得自定义配色里出现看不清的组合。
-
-    :param bg: 底色, 如 '#1b1d24'
-    :param accent: 强调色, 如 '#ff4d6d'
+    :param bg: 底色
     """
     dark = brightness(bg) < 140
     ink = "#ffffff" if dark else "#000000"
-    fg = mix_color(bg, ink, 0.88 if dark else 0.82)
+    return mix_color(bg, ink, 0.88 if dark else 0.82)
+
+
+def custom_scheme(bg, accent, fg=None):
+    """从一个底色 + 一个强调色推出一整套配色
+
+    文字颜色可以自己指定, 不指定就按底色深浅自动配;
+    其余的(次要文字、边框、悬停、选中)都由文字色和底色推出来。
+
+    :param bg: 底色, 如 '#1b1d24'
+    :param accent: 强调色, 如 '#ff4d6d'
+    :param fg: 文字颜色; 传空就用自动的
+    """
+    dark = brightness(bg) < 140
+    ink = "#ffffff" if dark else "#000000"
+    if not fg:
+        fg = auto_text_color(bg)
     head = mix_color(bg, "#000000", 0.10 if dark else 0.04)
     return dict(
         bg=bg,
