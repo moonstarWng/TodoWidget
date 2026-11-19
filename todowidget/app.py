@@ -19,8 +19,8 @@ from .paths import APP_DIR, CONF_FILE
 from .store import Store
 from . import theme as T
 from .theme import (P, apply_palette, custom_scheme, hex_to_rgb, pick_font,
-                    set_theme, use_paper)
-from .utils import HAS_TRAY, enable_acrylic, make_icon, place_window
+                    set_theme)
+from .utils import HAS_TRAY, make_icon, place_window
 
 if HAS_TRAY:
     from PIL import Image, ImageChops, ImageDraw, ImageTk
@@ -60,6 +60,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._resizing = False
         self._resize_job = None
         self._resize_target = None
+        self.skin_win = None
+        self.skin_label = None
+        self.skin_photo = None
+        self._skin_size = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
@@ -67,7 +71,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._title_target = None
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
-        self.texture = self.conf.get("texture", "solid")
         self._day_open = {}
         self._days_collapsed = False
         self.theme = self.conf.get("theme", "dark")
@@ -106,7 +109,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def save_conf(self):
         self.conf.update(mode=self.mode, topmost=self.topmost, alpha=self.alpha,
                          collapsed=bool(self.collapsed), tab=self.tab,
-                         sort_mode=self.sort_mode, texture=self.texture,
+                         sort_mode=self.sort_mode,
                          theme=self.theme, accent=self.accent,
                          resize_locked=bool(self.resize_locked),
                          show_stat=bool(self.show_stat),
@@ -153,22 +156,24 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def apply_palette_choice(self):
         """按当前主题和质感选一套配色"""
         self._theme_image = ""
-        if self.texture == "paper":
-            use_paper(self.accent)
+        custom = self.custom_theme()
+        if custom is not None:
+            apply_palette(custom_scheme(custom.get("bg") or "#17181d",
+                                        custom.get("accent") or "#5b9cff"))
+            self._theme_image = custom.get("image") or ""
         else:
-            custom = self.custom_theme()
-            if custom is not None:
-                apply_palette(custom_scheme(custom.get("bg") or "#17181d",
-                                            custom.get("accent") or "#5b9cff"))
-                self._theme_image = custom.get("image") or ""
-            else:
-                set_theme(self.theme, self.accent)
+            set_theme(self.theme, self.accent)
         self.bg_image = self.bg_image_path()
 
     def build_ui(self):
         self.apply_palette_choice()
         self.stop_title_fade()
         self._frozen = []
+        # 重建界面时旧的皮肤窗口已经被销毁, 这里把引用清掉
+        self.skin_win = None
+        self.skin_label = None
+        self.skin_photo = None
+        self._skin_size = None
         r = self.root
         is_desktop = self.mode == "desktop"
         r.title("待办清单")
@@ -190,20 +195,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         inner = tk.Frame(r, bg=P.bg)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
         self.inner = inner
-
-        # 自定义图片主题: 图片垫在最底下, 内容摆在一张卡片上, 四周露出图片
-        self._bg_label = None
-        self._bg_photo = None
-        self._bg_size = None
-        frame_pad = 10 if self.bg_image else 0
-        self._frame_pad = frame_pad
-        if self.bg_image:
-            self._bg_label = tk.Label(inner, bg=P.bg, bd=0,
-                                      highlightthickness=0)
-            self._bg_label.place(x=0, y=0, relwidth=1, relheight=1)
-            self._bg_label.lower()
+        self._frame_pad = 0
         card = tk.Frame(inner, bg=P.bg)
-        card.pack(fill="both", expand=True, padx=frame_pad, pady=frame_pad)
+        card.pack(fill="both", expand=True)
         self.card = card
 
         # 勾选框用小图片画, 比字符清楚, 也方便只点框勾选
@@ -450,7 +444,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.bind("<Control-q>", lambda e: self.quit())
         self.set_window_icon()
         self.apply_resize_state()
-        self.update_bg_image(force=True)
         # 重建界面后按当前宽度再摆一次, 免得统计/提示停在旧状态
         self._win_size = None
         self.fit_width(self.root.winfo_width())
@@ -684,6 +677,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             target_w, target_h = self._expanded_size or (330, 460)
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
             self.root.geometry("{}x{}".format(target_w, target_h))
+            self.sync_skin(target_w, target_h)
+            self.skin_round(start_w, start_h)
             self.fit_width(target_w)
             use_anim = animate and self.mode == "desktop"
             animator = self.animate_reveal if use_anim else None
@@ -800,6 +795,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             head.update_idletasks()
             self.paint_head_bg(max(1, width - 2 - 2 * self._frame_pad))
             self.round_window(width, height)
+            self.skin_round(width, height)
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -832,6 +828,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width = int(round(start_w + (target_w - start_w) * eased))
             height = int(round(start_h + (target_h - start_h) * eased))
             self.round_window(max(1, width), max(1, height))
+            self.skin_round(max(1, width), max(1, height))
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -870,6 +867,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.root.minsize(140, 42 + 2 * self._frame_pad)
         self.apply_resize_state()
         self.round_window(width, height)
+        self.sync_skin(width, height)
 
     def finish_expand(self, width=None, height=None):
         """展开动画结束: 恢复正常窗口的最小尺寸
@@ -880,6 +878,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.root.minsize(270, 220)
         self.apply_resize_state()
         self.round_window(width, height)
+        self.sync_skin(width, height)
 
     # ---------------- 拖右下角改宽高 ----------------
 
@@ -930,7 +929,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._resize_from = None
         self._resizing = False
         self.round_window()
-        self.update_bg_image()
+        self.refresh_skin_crop()
         self.save_geom()
 
     def toggle_resize_lock(self):
@@ -1013,36 +1012,197 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         self._win_size = (e.width, e.height)
         self.fit_width(e.width)
-        if self._bg_label is not None:
-            self.root.after(120, self.update_bg_image)
+        if self.skin_win is not None:
+            self.sync_skin()
+            self.root.after(160, self.refresh_skin_crop)
         # 动画每帧自己更新圆角区域, 拖动改大小时也别每帧重切, 不然更闪
         if not self._animating and not self._resizing:
             self.root.after(15, self.round_window)
 
-    def update_bg_image(self, force=False):
-        """按窗口当前大小裁好背景图, 铺在卡片底下
+    # ---------------- 图片皮肤 ----------------
 
-        :param force: 尺寸没变也重画一次
+    def skin_spec(self):
+        """当前是不是图片皮肤; 是的话返回那份自定义配色"""
+        if not HAS_TRAY:
+            return None
+        custom = self.custom_theme()
+        if custom is None:
+            return None
+        mode = custom.get("mode") or ("image" if custom.get("image") else "solid")
+        if mode != "image" or not custom.get("image"):
+            return None
+        if not self.bg_image_path():
+            return None
+        return custom
+
+    def skin_hwnd(self):
+        """皮肤窗口的原生句柄"""
+        win = self.skin_win
+        if win is None:
+            return 0
+        user32 = ctypes.windll.user32
+        return user32.GetParent(win.winfo_id()) or win.winfo_id()
+
+    def main_hwnd(self):
+        """主窗口的原生句柄"""
+        user32 = ctypes.windll.user32
+        return user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
+
+    def crop_skin_image(self, path, width, height, spec):
+        """把皮肤图按 cover + 缩放 + 偏移裁成窗口大小
+
+        :param path: 图片路径
+        :param width: 目标宽
+        :param height: 目标高
+        :param spec: 自定义配色字典(取 zoom / offset)
         """
-        label = getattr(self, "_bg_label", None)
-        if label is None or not HAS_TRAY:
+        from PIL import Image
+        image = Image.open(path).convert("RGB")
+        zoom = float(spec.get("zoom") or 1.0)
+        zoom = max(1.0, min(3.0, zoom))
+        scale = max(width / float(image.width),
+                    height / float(image.height)) * zoom
+        new_w = max(width, int(round(image.width * scale)))
+        new_h = max(height, int(round(image.height * scale)))
+        image = image.resize((new_w, new_h), Image.LANCZOS)
+        offset = spec.get("offset") or [0.0, 0.0]
+        offset_x = max(-1.0, min(1.0, float(offset[0])))
+        offset_y = max(-1.0, min(1.0, float(offset[1])))
+        span_x = new_w - width
+        span_y = new_h - height
+        left = int(round((offset_x + 1.0) / 2.0 * span_x))
+        top = int(round((offset_y + 1.0) / 2.0 * span_y))
+        return image.crop((left, top, left + width, top + height))
+
+    def make_skin(self):
+        """建一块只显示图片的窗口, 垫在主窗口下面"""
+        if self.skin_spec() is None:
+            self.destroy_skin()
+            return
+        if self.skin_win is None:
+            win = tk.Toplevel(self.root)
+            win.withdraw()
+            win.overrideredirect(True)
+            win.configure(bg="#000000")
+            label = tk.Label(win, bd=0, highlightthickness=0, bg="#000000")
+            label.place(x=0, y=0)
+            self.skin_win = win
+            self.skin_label = label
+            self._skin_size = None
+            self.skin_click_through()
+        self.reload_skin_image()
+        try:
+            self.skin_win.deiconify()
+        except Exception:
+            pass
+        self.sync_skin()
+
+    def destroy_skin(self):
+        """去掉图片皮肤窗口"""
+        win = self.skin_win
+        self.skin_win = None
+        self.skin_label = None
+        self.skin_photo = None
+        self._skin_size = None
+        if win is not None:
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+    def skin_click_through(self):
+        """皮肤窗口只负责显示, 不接收点击、不抢焦点、不进 Alt+Tab"""
+        try:
+            user32 = ctypes.windll.user32
+            hwnd = self.skin_hwnd()
+            gwl_exstyle = -20
+            style = user32.GetWindowLongPtrW(hwnd, gwl_exstyle)
+            style |= 0x00000020      # WS_EX_TRANSPARENT
+            style |= 0x08000000      # WS_EX_NOACTIVATE
+            style |= 0x00000080      # WS_EX_TOOLWINDOW
+            user32.SetWindowLongPtrW(hwnd, gwl_exstyle, style)
+        except Exception:
+            pass
+
+    def reload_skin_image(self):
+        """按窗口大小把皮肤图裁好"""
+        win = self.skin_win
+        spec = self.skin_spec()
+        if win is None or spec is None:
             return
         path = self.bg_image_path()
-        if not path:
-            return
-        width = max(20, self.root.winfo_width())
-        height = max(20, self.root.winfo_height())
-        if not force and self._bg_size == (width, height):
+        width = max(40, self.root.winfo_width())
+        height = max(40, self.root.winfo_height())
+        if self.collapsed and self._expanded_size:
+            width, height = self._expanded_size
+            width = max(40, width)
+            height = max(40, height)
+        if self._skin_size == (width, height) and self.skin_photo is not None:
             return
         try:
-            from PIL import Image, ImageEnhance, ImageOps
-            image = Image.open(path).convert("RGB")
-            image = ImageOps.fit(image, (width, height), method=Image.LANCZOS)
-            image = ImageEnhance.Brightness(image).enhance(0.92)
+            image = self.crop_skin_image(path, width, height, spec)
             photo = ImageTk.PhotoImage(image)
-            label.configure(image=photo)
-            self._bg_photo = photo
-            self._bg_size = (width, height)
+            self.skin_label.configure(image=photo)
+            self.skin_photo = photo
+            self._skin_size = (width, height)
+        except Exception:
+            pass
+
+    def refresh_skin_crop(self):
+        """窗口大小定下来以后重裁一次皮肤图"""
+        if self.skin_win is None or self._animating or self.collapsed:
+            return
+        width = max(40, self.root.winfo_width())
+        height = max(40, self.root.winfo_height())
+        if self._skin_size == (width, height):
+            return
+        self.reload_skin_image()
+        self.sync_skin()
+
+    def sync_skin(self, width=None, height=None):
+        """让皮肤窗口跟着主窗口的位置/大小, 并压在主窗口下面
+
+        :param width: 可见宽度(动画时传当前帧的值)
+        :param height: 可见高度
+        """
+        win = self.skin_win
+        if win is None:
+            return
+        root = self.root
+        try:
+            if root.state() == "withdrawn":
+                win.withdraw()
+                return
+            width = int(width or root.winfo_width())
+            height = int(height or root.winfo_height())
+            x = root.winfo_rootx()
+            y = root.winfo_rooty()
+            win.geometry("{}x{}+{}+{}".format(max(2, width), max(2, height),
+                                              x, y))
+            self.place_skin_below()
+            self.skin_round(width, height)
+        except Exception:
+            pass
+
+    def place_skin_below(self):
+        """把皮肤窗口排到主窗口正下方"""
+        try:
+            user32 = ctypes.windll.user32
+            flags = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
+            user32.SetWindowPos(self.skin_hwnd(), self.main_hwnd(),
+                                0, 0, 0, 0, flags)
+        except Exception:
+            pass
+
+    def skin_round(self, width, height):
+        """皮肤窗口也切圆角, 免得从主窗口四角露出来"""
+        try:
+            gdi32 = ctypes.windll.gdi32
+            user32 = ctypes.windll.user32
+            w = max(2, int(width))
+            h = max(2, int(height))
+            rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
+            user32.SetWindowRgn(self.skin_hwnd(), rgn, True)
         except Exception:
             pass
 
@@ -1103,10 +1263,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r = self.root
         r.withdraw()
         r.overrideredirect(self.mode == "desktop")
-        glass = (self.texture == "glass")
+        skin = self.skin_spec()
         alpha = float(self.alpha)
-        if glass:
-            alpha = 1.0
+        if skin is not None:
+            # 图片皮肤: 主窗口半透明, 让后面的图透出来
+            strength = float(skin.get("alpha") or 0.25)
+            strength = max(0.05, min(0.55, strength))
+            alpha = alpha * (1.0 - strength)
         try:
             r.attributes("-topmost", bool(self.topmost))
             r.attributes("-alpha", alpha)
@@ -1121,13 +1284,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.deiconify()
         r.lift()
         self.apply_resize_state()
-        if glass:
-            r.after(80, lambda: enable_acrylic(r))
+        if skin is not None:
+            self.make_skin()
         else:
-            r.after(10, lambda: enable_acrylic(r, state=0))
+            self.destroy_skin()
         if self.mode == "desktop" and not self.topmost:
             r.after(150, self.sink)
         r.after(60, self.round_window)
+        r.after(80, self.sync_skin)
         self.save_conf()
 
     def set_mode(self, mode):
@@ -1147,6 +1311,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
         self.save_conf()
+        self.place_skin_below()
         if not self.topmost and self.mode == "desktop":
             self.root.after(100, self.sink)
 
@@ -1161,6 +1326,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             ctypes.windll.user32.SetWindowPos(
                 hwnd, HWND_BOTTOM, 0, 0, 0, 0,
                 SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE)
+            self.place_skin_below()
         except Exception:
             pass
 
@@ -1214,10 +1380,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.root.iconify()
             return
         self.root.withdraw()
+        self.sync_skin()
 
     def show(self):
         self.root.deiconify()
         self.root.lift()
+        self.sync_skin()
         try:
             self.root.focus_force()
             self.raise_notes()
@@ -1282,6 +1450,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def quit(self):
         self.stop_title_fade()
         self.close_settings()
+        self.destroy_skin()
         self.save_geom()
         self.close_note()
         if self._tray is not None:

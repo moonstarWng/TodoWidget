@@ -10,10 +10,15 @@ import tkinter as tk
 import uuid
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
+try:
+    from PIL import Image, ImageTk
+except Exception:
+    Image = None
+    ImageTk = None
+
 from . import updater
 from .paths import APP_DIR
-from .theme import (P, TEXTURE_NAMES, THEMES, THEME_NAMES, best_text_color,
-                    set_theme)
+from .theme import P, THEMES, THEME_NAMES, best_text_color, set_theme
 from .utils import make_icon, round_corners
 
 # 设置窗口里各分类
@@ -340,13 +345,6 @@ class SettingsMixin:
         for widget in (row, swatch):
             widget.bind("<Button-1>", lambda ev: self.pick_accent())
 
-        holder = self.settings_block(panel, "质感", "窗口的底子材质")
-        for key, label in TEXTURE_NAMES:
-            self.settings_chip(holder, label, key == self.texture,
-                               lambda k=key: self.set_texture(k),
-                               group="texture", value=key)
-        self.settings_note(panel, "磨砂要 Win10 1803 以上，系统不支持会自动退回纯色。")
-
         holder = self.settings_block(panel, "统计", "顶栏显示还剩多少条没做")
         self.settings_chip(holder, "显示", self.show_stat,
                            lambda: self.choose_show_stat(True),
@@ -490,17 +488,6 @@ class SettingsMixin:
         self.reload_ui()
         self.open_settings(pos)
 
-    def set_texture(self, key):
-        """换质感(整块界面重建)"""
-        if key == self.texture:
-            return
-        pos = self.settings_pos()
-        self.close_settings()
-        self.texture = key
-        self.save_conf()
-        self.reload_ui()
-        self.open_settings(pos)
-
     # ---------------- 自定义配色编辑器 ----------------
 
     def copy_theme_image(self, source):
@@ -519,10 +506,15 @@ class SettingsMixin:
         :param theme: 要编辑的配色字典; 不传就是新建
         """
         existing = dict(theme) if theme else {}
+        mode = existing.get("mode") or ("image" if existing.get("image") else "solid")
         state = {
             "bg": existing.get("bg") or "#1b1d24",
             "accent": existing.get("accent") or P.accent,
             "image": existing.get("image") or "",
+            "mode": mode,
+            "zoom": float(existing.get("zoom") or 1.0),
+            "offset": list(existing.get("offset") or [0.0, 0.0]),
+            "alpha": float(existing.get("alpha") or 0.25),
         }
 
         win = tk.Toplevel(self.settings_win or self.root)
@@ -545,16 +537,32 @@ class SettingsMixin:
         close.pack(side="right", padx=6)
         close.bind("<Button-1>", lambda ev: self.close_theme_editor())
 
+        drag = {}
+
+        def start_move(ev):
+            drag["dx"] = ev.x_root - win.winfo_x()
+            drag["dy"] = ev.y_root - win.winfo_y()
+
+        def do_move(ev):
+            if "dx" not in drag:
+                return
+            win.geometry("+{}+{}".format(ev.x_root - drag["dx"],
+                                         ev.y_root - drag["dy"]))
+
+        head.bind("<Button-1>", start_move)
+        head.bind("<B1-Motion>", do_move)
+
         form = tk.Frame(body, bg=P.bg)
         form.pack(fill="both", expand=True, padx=16, pady=(12, 0))
 
-        def row_label(parent, text):
-            tk.Label(parent, text=text, bg=P.bg, fg=P.fg_dim,
-                     font=self.f_small, anchor="w", width=8).pack(side="left")
+        def row(parent, label, width=8):
+            line = tk.Frame(parent, bg=P.bg)
+            line.pack(fill="x", pady=(0, 8))
+            tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
+                     font=self.f_small, anchor="w", width=width).pack(side="left")
+            return line
 
-        name_row = tk.Frame(form, bg=P.bg)
-        name_row.pack(fill="x", pady=(0, 10))
-        row_label(name_row, "名称")
+        name_row = row(form, "名称")
         name_var = tk.StringVar(value=existing.get("name") or
                                "我的配色 {}".format(len(self.custom_themes) + 1))
         entry = tk.Entry(name_row, textvariable=name_var, bg=P.bg_alt, fg=P.fg,
@@ -563,13 +571,89 @@ class SettingsMixin:
                          highlightcolor=P.accent, font=self.f_item)
         entry.pack(side="left", fill="x", expand=True, ipady=4)
 
-        bg_row = tk.Frame(form, bg=P.bg)
-        bg_row.pack(fill="x", pady=(0, 10))
-        row_label(bg_row, "底色")
+        mode_row = row(form, "模式")
+        mode_chips = {}
+        for key, label in (("solid", "纯色"), ("image", "图片")):
+            chip = tk.Label(mode_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=14, pady=5, cursor="hand2")
+            chip.pack(side="left", padx=(0, 8))
+            chip.bind("<Button-1>", lambda ev, k=key: set_mode(k))
+            mode_chips[key] = chip
+
+        # 纯色模式: 只挑底色
+        solid_frame = tk.Frame(form, bg=P.bg)
+        bg_row = row(solid_frame, "底色")
         bg_swatch = tk.Frame(bg_row, bg=state["bg"], width=36, height=22,
                              highlightthickness=1, highlightbackground=P.border)
         bg_swatch.pack(side="left")
         bg_swatch.pack_propagate(False)
+        bg_btn = tk.Label(bg_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
+                          font=self.f_small, padx=10, pady=2, cursor="hand2")
+        bg_btn.pack(side="left", padx=8)
+        bg_btn.bind("<Button-1>", lambda ev: pick_bg())
+
+        # 图片模式: 图片 + 拖动裁剪 + 缩放 + 透明度
+        image_frame = tk.Frame(form, bg=P.bg)
+        image_row = row(image_frame, "图片")
+        image_label = tk.Label(image_row,
+                               text=os.path.basename(state["image"]) or "没有",
+                               bg=P.bg, fg=P.fg_dim, font=self.f_small,
+                               anchor="w")
+        image_label.pack(side="left", fill="x", expand=True)
+        image_btn = tk.Label(image_row, text="选图片…", bg=P.bg_alt,
+                             fg=P.fg_dim, font=self.f_small, padx=10, pady=2,
+                             cursor="hand2")
+        image_btn.pack(side="left", padx=8)
+        image_btn.bind("<Button-1>", lambda ev: pick_image())
+        clear_btn = tk.Label(image_row, text="清除", bg=P.bg, fg=P.fg_faint,
+                             font=self.f_small, padx=6, pady=2, cursor="hand2")
+        clear_btn.pack(side="left")
+        clear_btn.bind("<Button-1>", lambda ev: clear_image())
+
+        preview = tk.Canvas(image_frame, width=396, height=200, bg=P.bg_alt,
+                            highlightthickness=1, highlightbackground=P.border,
+                            cursor="fleur")
+        preview.pack(fill="x", pady=(0, 8))
+
+        zoom_row = row(image_frame, "缩放", width=6)
+        zoom_scale = tk.Scale(zoom_row, from_=100, to=250, resolution=5,
+                              orient="horizontal", bg=P.bg, fg=P.fg_dim,
+                              troughcolor=P.bg_alt, highlightthickness=0, bd=0,
+                              sliderrelief="flat", showvalue=False, length=220,
+                              command=lambda v: set_zoom(v))
+        zoom_scale.pack(side="left")
+        zoom_value = tk.Label(zoom_row, text="{}%".format(int(state["zoom"] * 100)),
+                              bg=P.bg, fg=P.fg_faint, font=self.f_small)
+        zoom_value.pack(side="left", padx=8)
+
+        alpha_row = row(image_frame, "透明度", width=6)
+        alpha_scale = tk.Scale(alpha_row, from_=5, to=55, resolution=5,
+                               orient="horizontal", bg=P.bg, fg=P.fg_dim,
+                               troughcolor=P.bg_alt, highlightthickness=0, bd=0,
+                               sliderrelief="flat", showvalue=False, length=220,
+                               command=lambda v: set_alpha(v))
+        alpha_scale.pack(side="left")
+        alpha_value = tk.Label(alpha_row,
+                               text="{}%".format(int(state["alpha"] * 100)),
+                               bg=P.bg, fg=P.fg_faint, font=self.f_small)
+        alpha_value.pack(side="left", padx=8)
+
+        accent_row = row(form, "强调色")
+        accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
+                                 height=22, highlightthickness=1,
+                                 highlightbackground=P.border)
+        accent_swatch.pack(side="left")
+        accent_swatch.pack_propagate(False)
+        accent_btn = tk.Label(accent_row, text="选择…", bg=P.bg_alt,
+                              fg=P.fg_dim, font=self.f_small, padx=10, pady=2,
+                              cursor="hand2")
+        accent_btn.pack(side="left", padx=8)
+        accent_btn.bind("<Button-1>", lambda ev: pick_accent())
+
+        note = self.settings_note(
+            body, "图片模式：图片铺满整个窗口，主界面整体半透明，图片从底下透出来；"
+                  "在上面的预览里拖动可以选露哪一块。")
+        note.pack(fill="x", padx=18, pady=(8, 0))
 
         def pick_bg():
             _, picked = colorchooser.askcolor(color=state["bg"], parent=win,
@@ -578,20 +662,6 @@ class SettingsMixin:
                 state["bg"] = picked
                 bg_swatch.configure(bg=picked)
 
-        bg_btn = tk.Label(bg_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
-                          font=self.f_small, padx=10, pady=2, cursor="hand2")
-        bg_btn.pack(side="left", padx=8)
-        bg_btn.bind("<Button-1>", lambda ev: pick_bg())
-
-        accent_row = tk.Frame(form, bg=P.bg)
-        accent_row.pack(fill="x", pady=(0, 10))
-        row_label(accent_row, "强调色")
-        accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
-                                 height=22, highlightthickness=1,
-                                 highlightbackground=P.border)
-        accent_swatch.pack(side="left")
-        accent_swatch.pack_propagate(False)
-
         def pick_accent():
             _, picked = colorchooser.askcolor(color=state["accent"], parent=win,
                                               title="选择强调色")
@@ -599,20 +669,14 @@ class SettingsMixin:
                 state["accent"] = picked
                 accent_swatch.configure(bg=picked)
 
-        accent_btn = tk.Label(accent_row, text="选择…", bg=P.bg_alt,
-                              fg=P.fg_dim, font=self.f_small, padx=10, pady=2,
-                              cursor="hand2")
-        accent_btn.pack(side="left", padx=8)
-        accent_btn.bind("<Button-1>", lambda ev: pick_accent())
-
-        image_row = tk.Frame(form, bg=P.bg)
-        image_row.pack(fill="x", pady=(0, 4))
-        row_label(image_row, "背景图片")
-        image_label = tk.Label(image_row,
-                               text=os.path.basename(state["image"]) or "没有",
-                               bg=P.bg, fg=P.fg_dim, font=self.f_small,
-                               anchor="w")
-        image_label.pack(side="left", fill="x", expand=True)
+        def image_path():
+            path = state["image"]
+            if not path:
+                return ""
+            if os.path.isabs(path):
+                return path if os.path.exists(path) else ""
+            full = os.path.join(APP_DIR, path.replace("/", os.sep))
+            return full if os.path.exists(full) else ""
 
         def pick_image():
             path = filedialog.askopenfilename(
@@ -627,27 +691,116 @@ class SettingsMixin:
                 messagebox.showerror("选择图片", "复制图片失败：{}".format(exc),
                                      parent=win)
                 return
+            state["_pil"] = None
+            state["offset"] = [0.0, 0.0]
             image_label.config(text=os.path.basename(state["image"]))
-
-        image_btn = tk.Label(image_row, text="选图片…", bg=P.bg_alt,
-                             fg=P.fg_dim, font=self.f_small, padx=10, pady=2,
-                             cursor="hand2")
-        image_btn.pack(side="left", padx=8)
-        image_btn.bind("<Button-1>", lambda ev: pick_image())
-        clear_btn = tk.Label(image_row, text="清除", bg=P.bg, fg=P.fg_faint,
-                             font=self.f_small, padx=6, pady=2, cursor="hand2")
-        clear_btn.pack(side="left")
+            render_preview()
 
         def clear_image():
             state["image"] = ""
+            state["_pil"] = None
             image_label.config(text="没有")
+            render_preview()
 
-        clear_btn.bind("<Button-1>", lambda ev: clear_image())
+        def set_mode(key):
+            state["mode"] = key
+            for chip_key, chip in mode_chips.items():
+                chosen = (chip_key == key)
+                chip.configure(bg=P.accent if chosen else P.bg_alt,
+                               fg=best_text_color(P.accent) if chosen else P.fg_dim)
+            if key == "image":
+                solid_frame.pack_forget()
+                image_frame.pack(fill="x", before=accent_row)
+                resize_window(640)
+                render_preview()
+            else:
+                image_frame.pack_forget()
+                solid_frame.pack(fill="x", before=accent_row)
+                resize_window(360)
 
-        self.settings_note(panel_note := tk.Frame(body, bg=P.bg),
-                           "背景图片铺在窗口最底下，列表会放在一张卡片上，"
-                           "四周露出图片。")
-        panel_note.pack(fill="x", padx=18, pady=(6, 0))
+        def resize_window(height):
+            """按模式把编辑框调高/调矮, 别留一大片空白"""
+            try:
+                x = win.winfo_x()
+                y = win.winfo_y()
+                win.geometry("{}x{}+{}+{}".format(470, height, x, y))
+                win.after(20, lambda w=win: round_corners(w, 12))
+            except Exception:
+                pass
+
+        def set_zoom(value):
+            state["zoom"] = max(1.0, min(2.5, float(value) / 100.0))
+            zoom_value.config(text="{}%".format(int(round(state["zoom"] * 100))))
+            render_preview()
+
+        def set_alpha(value):
+            state["alpha"] = max(0.05, min(0.55, float(value) / 100.0))
+            alpha_value.config(
+                text="{}%".format(int(round(state["alpha"] * 100))))
+
+        def render_preview():
+            preview.delete("all")
+            if not state["image"] or Image is None:
+                preview.create_text(198, 100, text="选一张图片后在这里拖动调整位置",
+                                    fill=P.fg_faint, font=self.f_small)
+                return
+            path = image_path()
+            if not path:
+                return
+            try:
+                image = state.get("_pil")
+                if image is None:
+                    image = Image.open(path).convert("RGB")
+                    image.thumbnail((1600, 1600), Image.LANCZOS)
+                    state["_pil"] = image
+                pw, ph = 396, 200
+                zoom = max(1.0, min(3.0, float(state["zoom"])))
+                scale = max(pw / float(image.width),
+                            ph / float(image.height)) * zoom
+                new_w = max(pw, int(round(image.width * scale)))
+                new_h = max(ph, int(round(image.height * scale)))
+                scaled = image.resize((new_w, new_h), Image.BILINEAR)
+                span_x = new_w - pw
+                span_y = new_h - ph
+                left = int(round((state["offset"][0] + 1.0) / 2.0 * span_x))
+                top = int(round((state["offset"][1] + 1.0) / 2.0 * span_y))
+                crop = scaled.crop((left, top, left + pw, top + ph))
+                photo = ImageTk.PhotoImage(crop)
+                preview.create_image(0, 0, anchor="nw", image=photo)
+                preview.image = photo
+                state["_span"] = (span_x, span_y)
+            except Exception:
+                pass
+
+        preview_drag = {}
+
+        def preview_press(ev):
+            preview_drag["x"] = ev.x
+            preview_drag["y"] = ev.y
+
+        def preview_move(ev):
+            if "x" not in preview_drag:
+                return
+            span_x, span_y = state.get("_span") or (0, 0)
+            dx = ev.x - preview_drag["x"]
+            dy = ev.y - preview_drag["y"]
+            preview_drag["x"] = ev.x
+            preview_drag["y"] = ev.y
+            if span_x > 0:
+                value = state["offset"][0] - dx * 2.0 / span_x
+                state["offset"][0] = max(-1.0, min(1.0, value))
+            if span_y > 0:
+                value = state["offset"][1] - dy * 2.0 / span_y
+                state["offset"][1] = max(-1.0, min(1.0, value))
+            render_preview()
+
+        def preview_release(ev):
+            preview_drag.pop("x", None)
+            preview_drag.pop("y", None)
+
+        preview.bind("<ButtonPress-1>", preview_press)
+        preview.bind("<B1-Motion>", preview_move)
+        preview.bind("<ButtonRelease-1>", preview_release)
 
         buttons = tk.Frame(body, bg=P.bg)
         buttons.pack(fill="x", padx=16, pady=14)
@@ -663,11 +816,19 @@ class SettingsMixin:
             state, name_var, theme, win))
 
         win.bind("<Escape>", lambda ev: self.close_theme_editor())
-        width, height = 420, 330
+        zoom_scale.set(int(round(state["zoom"] * 100)))
+        alpha_scale.set(int(round(state["alpha"] * 100)))
+        set_mode(state["mode"])
+        render_preview()
+
+        width, height = 470, (640 if state["mode"] == "image" else 360)
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
         y = base.winfo_rooty() + (base.winfo_height() - height) // 2
-        win.geometry("{}x{}+{}+{}".format(width, height, max(0, x), max(0, y)))
+        left, top, right, bottom = self.settings_bounds()
+        x = max(left + 8, min(x, right - width - 8))
+        y = max(top + 8, min(y, bottom - height - 8))
+        win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
         win.after(20, lambda w=win: round_corners(w, 12))
         win.lift()
@@ -705,7 +866,11 @@ class SettingsMixin:
             theme = {"id": uuid.uuid4().hex[:8]}
             self.custom_themes.append(theme)
         theme.update(name=name, bg=state["bg"], accent=state["accent"],
-                     image=state["image"])
+                     image=state["image"], mode=state.get("mode", "solid"),
+                     zoom=round(float(state.get("zoom") or 1.0), 3),
+                     offset=[round(float(state.get("offset", [0.0, 0.0])[0]), 3),
+                             round(float(state.get("offset", [0.0, 0.0])[1]), 3)],
+                     alpha=round(float(state.get("alpha") or 0.25), 3))
         self.theme = "custom:" + theme["id"]
         self.accent = None
         self.save_conf()

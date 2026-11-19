@@ -121,15 +121,6 @@ LIST_COLORS = ("#5b9cff", "#43c08a", "#e0a458", "#c86bd8",
                "#e06b6b", "#3fb8cc")
 TAB_COLORS = {"pending": None, "done": "#43c08a"}
 
-TEXTURE_NAMES = (("solid", "纯色"), ("paper", "纸质"), ("glass", "磨砂"))
-
-# 纸质质感: 暖米色, 不管当前主题是什么都用这套
-PAPER_SCHEME = dict(
-    bg="#f4ecdc", bg_alt="#ece2cd", head="#f0e8d6", border="#d5c5a3",
-    group_bg="#e9dfc7", hover="#e3d7bd", fg="#3a3226", fg_dim="#7e735c",
-    fg_faint="#a99d84", accent="#b07b32", done="#a89b82",
-    group="#221d15", sel="#dcc9a2")
-
 FONTS = ("Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI", "TkDefaultFont")
 
 
@@ -160,11 +151,6 @@ def set_theme(name, accent=None):
     if theme is None:
         theme = THEMES["dark"]
     apply_palette(theme, accent)
-
-
-def use_paper(accent=None):
-    """切到纸质配色"""
-    apply_palette(PAPER_SCHEME, accent)
 
 
 def pick_font(root, size, weight="normal", overstrike=False):
