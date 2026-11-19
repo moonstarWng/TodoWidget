@@ -274,7 +274,7 @@ class SettingsMixin:
         self.refresh()
         self.apply_window()
         if was_folded:
-            self.set_folded(True)
+            self.set_folded(True, animate=False)
 
         for note_id in pinned_ids:
             item = self.store.find_item(note_id)

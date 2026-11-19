@@ -56,6 +56,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.resize_locked = bool(self.conf.get("resize_locked", False))
         self._resize_from = None
         self._resizing = False
+        self._fold_job = None
+        self._animating = False
+        self._frozen = []
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
         self.texture = self.conf.get("texture", "solid")
@@ -77,7 +80,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         folded = bool(self.conf.get("collapsed"))
         self.apply_window()
         if folded:
-            self.set_folded(True)
+            self.set_folded(True, animate=False)
         self.start_tray()
 
     # ---------------- 配置 ----------------
@@ -102,7 +105,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
 
     def save_geom(self):
-        if self.root.state() != "normal":
+        if self.root.state() != "normal" or self._animating:
             return
         w, h = self.root.winfo_width(), self.root.winfo_height()
         if self.collapsed and self._expanded_size:
@@ -122,6 +125,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def build_ui(self):
         self.apply_palette_choice()
+        self._frozen = []
         r = self.root
         is_desktop = self.mode == "desktop"
         r.title("待办清单")
@@ -226,7 +230,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self._drag = None
             self._drag_moved = False
             self.save_geom()
-            if as_click and not moved:
+            if as_click and not moved and not self.collapsed:
                 self.open_list_menu(e)
 
         for widget in (head, self.lbl_stat):
@@ -410,6 +414,16 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             return None
 
+    def update_title(self):
+        """左上角标题: 收起时固定显示"待办清单", 展开时显示当前清单名"""
+        if self.collapsed:
+            self.lbl_title.config(text="待办清单", cursor="arrow")
+            return
+        name = self.store.current_name()
+        if len(name) > 10:
+            name = name[:9] + "\u2026"
+        self.lbl_title.config(text=name + "  \u25be", cursor="hand2")
+
     def set_tab(self, key):
         if key == self.tab:
             return
@@ -456,13 +470,28 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         width += 14 + 2 + 8 + 3 * 4 + 4
         return max(140, width)
 
-    def set_folded(self, folded):
-        """右上角折叠: 只留一条窄横条"""
+    def set_folded(self, folded, on_done=None, animate=True):
+        """右上角折叠: 平滑地收成一条窄横条 / 展开回原来的大小
+
+        :param folded: True 收起, False 展开
+        :param on_done: 动画跑完后要做的事(比如展开后马上新建)
+        :param animate: 要不要过渡动画(启动时直接摆好, 别闪一下)
+        """
         if folded == self.collapsed:
+            if on_done is not None:
+                on_done()
             return
         self.collapsed = bool(folded)
+        self.update_title()
+        # 动画期间窗口比较矮, 先放开正常的最小尺寸, 结束再恢复
+        self.root.minsize(140, 42)
+        start_w = max(1, self.root.winfo_width())
+        start_h = max(1, self.root.winfo_height())
         if self.collapsed:
             w, h = self.root.winfo_width(), self.root.winfo_height()
+            if self._animating and self._expanded_size:
+                # 展开动画还没跑完就又收起, 目标仍按原来的展开尺寸
+                w, h = self._expanded_size
             if w < 120 or h < 120:
                 try:
                     size = self.conf.get("geom", "").split("+")[0]
@@ -470,26 +499,185 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 except Exception:
                     w, h = 330, 460
             self._expanded_size = (w, h)
-            for w in (self._track, self._tabbar, self._body, self._foot, self._line):
-                w.pack_forget()
             self.btn_fold.config(text="\u25be")
-            # 收起后不看统计, 把这一行也去掉, 横条才能缩窄
+            # 收起后不看统计, 先把这一行去掉, 横条才缩得窄
             self.lbl_stat.pack_forget()
-            self.root.minsize(140, 42)
-            self.root.geometry("{}x{}".format(self.folded_width(), 42))
+            target_w, target_h = self.folded_width(), 42
+            # 下面的内容钉住不动, 跟着窗口边缘被裁掉
+            if animate:
+                self.freeze_content()
+            use_anim = animate and self.mode == "desktop"
+            animator = self.animate_fold if use_anim else None
         else:
-            self._track.pack(fill="x", side="top")
-            self._tabbar.pack(fill="x", side="top")
-            self._foot.pack(fill="x", side="bottom")
-            self._line.pack(fill="x", side="bottom")
-            self._body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
-            self.lbl_stat.pack(side="left", pady=(3, 0), after=self.lbl_title)
+            self.restore_layout()
             self.btn_fold.config(text="\u25b4")
-            self.root.minsize(270, 220)
-            w, h = self._expanded_size or (330, 460)
-            self.root.geometry("{}x{}".format(w, h))
-        self.apply_resize_state()
+            target_w, target_h = self._expanded_size or (330, 460)
+            # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
+            self.root.geometry("{}x{}".format(target_w, target_h))
+            self.fit_width(target_w)
+            use_anim = animate and self.mode == "desktop"
+            animator = self.animate_reveal if use_anim else None
+
+        def finish():
+            if self.collapsed:
+                self.finish_collapse(target_w, target_h)
+            else:
+                self.finish_expand(target_w, target_h)
+            if on_done is not None:
+                on_done()
+
+        if animator is None:
+            self.root.geometry("{}x{}".format(target_w, target_h))
+            self.fit_width(target_w)
+            finish()
+        else:
+            animator(start_w, start_h, target_w, target_h, finish)
         self.save_conf()
+
+    def restore_layout(self):
+        """把顶栏下面的部分重新装回来
+
+        底栏和分隔线先占位, 列表最后 pack 去分剩下的空间, 免得被挤掉。
+        """
+        self.unfreeze_content()
+        self._track.pack(fill="x", side="top")
+        self._tabbar.pack(fill="x", side="top")
+        self._foot.pack(fill="x", side="bottom")
+        self._line.pack(fill="x", side="bottom")
+        self._body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
+
+    def freeze_content(self):
+        """把顶栏下面的部件按当前尺寸钉住
+
+        收起动画里窗口一直在变小, 如果让 pack 每帧重排, 列表会被压扁、
+        页签只露半截; 钉住以后就只是被窗口边缘裁掉, 像拉窗帘一样。
+        """
+        frozen = []
+        for widget in (self._track, self._tabbar, self._body,
+                       self._foot, self._line):
+            manager = widget.winfo_manager()
+            if manager != "pack" or not widget.winfo_ismapped():
+                continue
+            geo = (widget.winfo_x(), widget.winfo_y(),
+                   widget.winfo_width(), widget.winfo_height())
+            widget.pack_forget()
+            widget.place(x=geo[0], y=geo[1], width=geo[2], height=geo[3])
+            frozen.append(widget)
+        self._frozen = frozen
+
+    def unfreeze_content(self):
+        """放开钉住的部件, 之后可以重新 pack"""
+        for widget in self._frozen:
+            try:
+                widget.place_forget()
+            except Exception:
+                pass
+        self._frozen = []
+
+    def animate_fold(self, start_w, start_h, target_w, target_h, done):
+        """收起用: 真实窗口尺寸按缓出曲线变小, 顶栏跟着重排
+
+        下面已钉住的部件不会每帧重排, 只是被窗口边缘裁掉。
+
+        :param start_w: 起始宽度
+        :param start_h: 起始高度
+        :param target_w: 目标宽度
+        :param target_h: 目标高度
+        :param done: 动画结束后的收尾函数
+        """
+        self.stop_fold_anim()
+        steps = 14
+        state = {"step": 0}
+
+        def tick():
+            state["step"] += 1
+            ratio = state["step"] / float(steps)
+            # 三次缓出: 起步快、收尾慢, 看着不生硬
+            eased = 1.0 - (1.0 - ratio) ** 3
+            width = int(round(start_w + (target_w - start_w) * eased))
+            height = int(round(start_h + (target_h - start_h) * eased))
+            width = max(1, width)
+            height = max(1, height)
+            self.root.geometry("{}x{}".format(width, height))
+            self.round_window(width, height)
+            if state["step"] < steps:
+                self._fold_job = self.root.after(16, tick)
+                return
+            self._fold_job = None
+            self._animating = False
+            done()
+
+        self._animating = True
+        tick()
+
+    def animate_reveal(self, start_w, start_h, target_w, target_h, done):
+        """展开用: 窗口已经是最终大小, 只把可见区域从横条慢慢放出来
+
+        内容先按最终尺寸排好再露出, 不会每帧重排版。
+
+        :param start_w: 起始可见宽度
+        :param start_h: 起始可见高度
+        :param target_w: 目标宽度
+        :param target_h: 目标高度
+        :param done: 动画结束后的收尾函数
+        """
+        self.stop_fold_anim()
+        steps = 14
+        state = {"step": 0}
+
+        def tick():
+            state["step"] += 1
+            ratio = state["step"] / float(steps)
+            eased = 1.0 - (1.0 - ratio) ** 3
+            width = int(round(start_w + (target_w - start_w) * eased))
+            height = int(round(start_h + (target_h - start_h) * eased))
+            self.round_window(max(1, width), max(1, height))
+            if state["step"] < steps:
+                self._fold_job = self.root.after(16, tick)
+                return
+            self._fold_job = None
+            self._animating = False
+            done()
+
+        self._animating = True
+        # 先把可见区域压回横条大小, 再从这一帧开始放
+        self.round_window(max(1, start_w), max(1, start_h))
+        tick()
+
+    def stop_fold_anim(self):
+        """取消还没跑完的收起 / 展开动画"""
+        if self._fold_job is not None:
+            try:
+                self.root.after_cancel(self._fold_job)
+            except Exception:
+                pass
+            self._fold_job = None
+        self._animating = False
+
+    def finish_collapse(self, width=None, height=None):
+        """收起动画结束: 卸掉下面的内容, 只留顶栏
+
+        :param width: 收起后的宽度(动画最后一帧, 免得取到旧值)
+        :param height: 收起后的高度
+        """
+        self.unfreeze_content()
+        for widget in (self._track, self._tabbar, self._body,
+                       self._foot, self._line):
+            widget.pack_forget()
+        self.lbl_stat.pack_forget()
+        self.root.minsize(140, 42)
+        self.apply_resize_state()
+        self.round_window(width, height)
+
+    def finish_expand(self, width=None, height=None):
+        """展开动画结束: 恢复正常窗口的最小尺寸
+
+        :param width: 展开后的宽度
+        :param height: 展开后的高度
+        """
+        self.root.minsize(270, 220)
+        self.apply_resize_state()
+        self.round_window(width, height)
 
     # ---------------- 拖右下角改宽高 ----------------
 
@@ -534,11 +722,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def apply_resize_state(self):
         """按锁定 / 折叠 / 窗口模式 决定要不要显示右下角调节柄"""
         locked = bool(getattr(self, "resize_locked", False))
-        native = self.mode == "window"
-        try:
-            self.root.resizable(native and not locked, native and not locked)
-        except Exception:
-            pass
+        # 无边框窗口本来就没系统边框可拖, 不去动 resizable:
+        # 在 Windows 上改这个会重刷一遍窗口, 主界面闪一下还会丢圆角
+        if self.mode == "window":
+            try:
+                self.root.resizable(not locked, not locked)
+            except Exception:
+                pass
         grip = getattr(self, "grip", None)
         if grip is None:
             return
@@ -581,16 +771,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         self._win_size = (e.width, e.height)
         self.fit_width(e.width)
-        self.root.after(15, self.round_window)
+        # 动画每帧自己更新圆角区域, 这里不用再排一次
+        if not self._animating:
+            self.root.after(15, self.round_window)
 
-    def round_window(self):
-        """无边框 + 圆角, 看着像个小组件"""
+    def round_window(self, width=None, height=None):
+        """无边框 + 圆角, 看着像个小组件
+
+        动画过程中传当前帧的尺寸进来, 免得 winfo_width 还是上一帧的旧值。
+        """
         if self.mode != "desktop":
             return
         try:
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            w = max(2, self.root.winfo_width())
-            h = max(2, self.root.winfo_height())
+            w = max(2, int(width or self.root.winfo_width()))
+            h = max(2, int(height or self.root.winfo_height()))
             rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
             ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
         except Exception:

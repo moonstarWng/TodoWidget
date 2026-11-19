@@ -51,6 +51,9 @@ class ListMenuMixin:
         return menu
 
     def open_list_menu(self, event=None):
+        # 收起成横条时标题是固定的"待办清单", 不弹清单菜单
+        if self.collapsed:
+            return
         self.finish_edit()
         menu = self.build_list_menu()
         x = self.lbl_title.winfo_rootx()

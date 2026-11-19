@@ -26,8 +26,6 @@ def run_selftest():
     TodoApp.start_tray = lambda self: None
     root = TkApp()
     app = TodoApp(root, store=Store(data_path, import_json=False))
-    if app.collapsed:
-        app.set_folded(False)
     app.sort_mode = "manual"   # 自检不受本机排序设置影响
     app.set_tab("pending")
     results = []
@@ -40,12 +38,24 @@ def run_selftest():
             root.update()
             time.sleep(0.02)
 
+    def settle_anim():
+        """等收起 / 展开动画跑完"""
+        for _ in range(80):
+            root.update()
+            if app._fold_job is None:
+                settle(2)
+                return
+            time.sleep(0.02)
+
     def find(text):
         for iid, ref in app._refs.items():
             if ref["item"]["text"] == text:
                 return iid
         return None
 
+    if app.collapsed:
+        app.set_folded(False)
+        settle_anim()
     settle(8)
 
     # 不写死任务名, 直接取两条未完成的子任务和第一个分组
@@ -155,15 +165,21 @@ def run_selftest():
     app.mode = "desktop"
     before_w = root.winfo_width()
     app.set_folded(True)
-    settle()
+    settle_anim()
     folded_w = root.winfo_width()
     stat_hidden = not app.lbl_stat.winfo_manager()
     check("收起后横条变窄", folded_w < before_w and folded_w <= 220)
     check("收起后不显示统计文字", stat_hidden)
+    check("收起后标题固定为待办清单",
+          app.lbl_title.cget("text") == "待办清单")
     app.set_folded(False)
-    settle()
-    check("展开后宽高恢复", root.winfo_width() >= 270
-          and bool(app.lbl_stat.winfo_manager()))
+    settle_anim()
+    check("展开后宽高恢复",
+          root.winfo_width() >= 270 and root.winfo_height() >= 220)
+    wide_enough = root.winfo_width() >= 300
+    check("展开后统计文字按宽度显示",
+          bool(app.lbl_stat.winfo_manager()) == wide_enough)
+    check("展开后标题变回清单名", app.lbl_title.cget("text") != "待办清单")
 
     # 右下角调节柄: 解开时有, 锁住后消失
     app.set_resize_locked(False)

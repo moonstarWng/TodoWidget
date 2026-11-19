@@ -63,10 +63,7 @@ class ListViewMixin:
     def refresh(self, sync_open=True):
         t = self.tree
         sel = t.focus()
-        name = self.store.current_name()
-        if len(name) > 10:
-            name = name[:9] + "\u2026"
-        self.lbl_title.config(text=name + "  \u25be")
+        self.update_title()
         try:
             current = self.store.current_list()
             color = (current or {}).get("color") or P.accent
@@ -278,7 +275,10 @@ class ListViewMixin:
 
     def add_top(self):
         if self.collapsed:
-            self.set_folded(False)
+            # 等展开动画跑完再定位输入框, 不然行还挤在横条里
+            self.set_folded(False,
+                            on_done=lambda: self._add_to(self.store.items, ""))
+            return
         self._add_to(self.store.items, "")
 
     def add_child(self):
