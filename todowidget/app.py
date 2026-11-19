@@ -471,6 +471,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         body.pack_forget()
         body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
 
+        # 最小化/恢复、藏到托盘/再显示, 皮肤窗口都跟着主窗口走
+        r.bind("<Map>", lambda e: self.sync_skin(), add="+")
+        r.bind("<Unmap>", lambda e: self.sync_skin(), add="+")
         r.bind("<FocusOut>", self.on_focus_out)
         r.bind("<Button-1>", self.on_any_click, add="+")
         r.bind("<Configure>", self.on_win_configure, add="+")
@@ -1424,9 +1427,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         root = self.root
         try:
-            if root.state() == "withdrawn":
+            if root.state() in ("withdrawn", "iconic"):
                 win.withdraw()
                 return
+            if win.state() != "normal":
+                # 主窗口藏起来过又显示出来时, 皮肤窗口也要跟着回来
+                win.deiconify()
             width = int(width or root.winfo_width())
             height = int(height or root.winfo_height())
             size = (max(2, width), max(2, height))
