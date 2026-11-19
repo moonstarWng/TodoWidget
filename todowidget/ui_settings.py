@@ -404,7 +404,10 @@ class SettingsMixin:
         key = "custom:" + str(theme.get("id"))
         chosen = (key == self.theme)
         cell = self.theme_cell(parent)
-        swatch, dot = self.theme_swatch(cell, theme.get("bg") or P.bg,
+        base = theme.get("bg") or P.bg
+        if theme.get("mode") == "gradient":
+            base = theme.get("grad_start") or base
+        swatch, dot = self.theme_swatch(cell, base,
                                         theme.get("accent") or P.accent,
                                         chosen)
         name = self.theme_name(cell, theme.get("name") or "自定义", chosen)
@@ -515,6 +518,9 @@ class SettingsMixin:
             "zoom": float(existing.get("zoom") or 1.0),
             "offset": list(existing.get("offset") or [0.0, 0.0]),
             "alpha": float(existing.get("alpha") or 0.2),
+            "grad_start": existing.get("grad_start") or "#1b2030",
+            "grad_end": existing.get("grad_end") or "#3a2a52",
+            "grad_angle": existing.get("grad_angle") or "vertical",
         }
 
         win = tk.Toplevel(self.settings_win or self.root)
@@ -573,7 +579,7 @@ class SettingsMixin:
 
         mode_row = row(form, "模式")
         mode_chips = {}
-        for key, label in (("solid", "纯色"), ("image", "图片")):
+        for key, label in (("solid", "纯色"), ("gradient", "渐变"), ("image", "图片")):
             chip = tk.Label(mode_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
                             font=self.f_small, padx=14, pady=5, cursor="hand2")
             chip.pack(side="left", padx=(0, 8))
@@ -591,6 +597,40 @@ class SettingsMixin:
                           font=self.f_small, padx=10, pady=2, cursor="hand2")
         bg_btn.pack(side="left", padx=8)
         bg_btn.bind("<Button-1>", lambda ev: pick_bg())
+
+        # 渐变模式: 起止两个颜色 + 方向
+        gradient_frame = tk.Frame(form, bg=P.bg)
+        start_row = row(gradient_frame, "起始色")
+        start_swatch = tk.Frame(start_row, bg=state["grad_start"], width=36,
+                                height=22, highlightthickness=1,
+                                highlightbackground=P.border)
+        start_swatch.pack(side="left")
+        start_swatch.pack_propagate(False)
+        start_btn = tk.Label(start_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
+                             font=self.f_small, padx=10, pady=2, cursor="hand2")
+        start_btn.pack(side="left", padx=8)
+        start_btn.bind("<Button-1>", lambda ev: pick_grad("start"))
+
+        end_row = row(gradient_frame, "结束色")
+        end_swatch = tk.Frame(end_row, bg=state["grad_end"], width=36,
+                              height=22, highlightthickness=1,
+                              highlightbackground=P.border)
+        end_swatch.pack(side="left")
+        end_swatch.pack_propagate(False)
+        end_btn = tk.Label(end_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
+                           font=self.f_small, padx=10, pady=2, cursor="hand2")
+        end_btn.pack(side="left", padx=8)
+        end_btn.bind("<Button-1>", lambda ev: pick_grad("end"))
+
+        angle_row = row(gradient_frame, "方向")
+        angle_chips = {}
+        for key, label in (("vertical", "竖向"), ("horizontal", "横向"),
+                           ("diagonal", "斜向")):
+            chip = tk.Label(angle_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=12, pady=4, cursor="hand2")
+            chip.pack(side="left", padx=(0, 8))
+            chip.bind("<Button-1>", lambda ev, k=key: set_angle(k))
+            angle_chips[key] = chip
 
         # 预览按主窗口的宽高比来, 看到的就是实际会露出来的那一块
         try:
@@ -640,7 +680,7 @@ class SettingsMixin:
                               bg=P.bg, fg=P.fg_faint, font=self.f_small)
         zoom_value.pack(side="left", padx=8)
 
-        alpha_row = row(image_frame, "透明度", width=6)
+        alpha_row = row(form, "透明度", width=6)
         alpha_scale = tk.Scale(alpha_row, from_=5, to=45, resolution=5,
                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
                                troughcolor=P.bg_alt, highlightthickness=0, bd=0,
@@ -651,6 +691,7 @@ class SettingsMixin:
                                text="{}%".format(int(state["alpha"] * 100)),
                                bg=P.bg, fg=P.fg_faint, font=self.f_small)
         alpha_value.pack(side="left", padx=8)
+        alpha_row.pack_forget()
 
         accent_row = row(form, "强调色")
         accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
@@ -665,8 +706,8 @@ class SettingsMixin:
         accent_btn.bind("<Button-1>", lambda ev: pick_accent())
 
         note = self.settings_note(
-            body, "图片模式：图片铺满整个窗口，主界面整体半透明，图片从底下透出来；"
-                  "预览里拖动挪位置、滚轮缩放，比例跟实际窗口一致。")
+            body, "渐变 / 图片模式：底图铺满整个窗口，主界面整体半透明，底图从底下透出来；"
+                  "图片模式的预览里拖动挪位置、滚轮缩放，比例跟实际窗口一致。")
         note.pack(fill="x", padx=18, pady=(8, 0))
 
         def pick_bg():
@@ -682,6 +723,23 @@ class SettingsMixin:
             if picked:
                 state["accent"] = picked
                 accent_swatch.configure(bg=picked)
+
+        def pick_grad(which):
+            """渐变模式选起始色 / 结束色"""
+            key = "grad_start" if which == "start" else "grad_end"
+            swatch = start_swatch if which == "start" else end_swatch
+            _, picked = colorchooser.askcolor(color=state[key], parent=win,
+                                              title="选择渐变颜色")
+            if picked:
+                state[key] = picked
+                swatch.configure(bg=picked)
+
+        def set_angle(key):
+            state["grad_angle"] = key
+            for chip_key, chip in angle_chips.items():
+                chosen = (chip_key == key)
+                chip.configure(bg=P.accent if chosen else P.bg_alt,
+                               fg=best_text_color(P.accent) if chosen else P.fg_dim)
 
         def image_path():
             path = state["image"]
@@ -722,13 +780,20 @@ class SettingsMixin:
                 chosen = (chip_key == key)
                 chip.configure(bg=P.accent if chosen else P.bg_alt,
                                fg=best_text_color(P.accent) if chosen else P.fg_dim)
+            solid_frame.pack_forget()
+            gradient_frame.pack_forget()
+            image_frame.pack_forget()
+            alpha_row.pack_forget()
             if key == "image":
-                solid_frame.pack_forget()
                 image_frame.pack(fill="x", before=accent_row)
+                alpha_row.pack(fill="x", before=accent_row)
                 resize_window(640)
                 render_preview()
+            elif key == "gradient":
+                gradient_frame.pack(fill="x", before=accent_row)
+                alpha_row.pack(fill="x", before=accent_row)
+                resize_window(420)
             else:
-                image_frame.pack_forget()
                 solid_frame.pack(fill="x", before=accent_row)
                 resize_window(360)
 
@@ -845,10 +910,12 @@ class SettingsMixin:
         win.bind("<Escape>", lambda ev: self.close_theme_editor())
         zoom_scale.set(int(round(state["zoom"] * 100)))
         alpha_scale.set(int(round(state["alpha"] * 100)))
+        set_angle(state["grad_angle"])
         set_mode(state["mode"])
         render_preview()
 
-        width, height = 470, (640 if state["mode"] == "image" else 360)
+        sizes = {"solid": 360, "gradient": 420, "image": 640}
+        width, height = 470, sizes.get(state["mode"], 360)
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
         y = base.winfo_rooty() + (base.winfo_height() - height) // 2
@@ -894,6 +961,9 @@ class SettingsMixin:
             self.custom_themes.append(theme)
         theme.update(name=name, bg=state["bg"], accent=state["accent"],
                      image=state["image"], mode=state.get("mode", "solid"),
+                     grad_start=state.get("grad_start") or "#1b2030",
+                     grad_end=state.get("grad_end") or "#2a2a40",
+                     grad_angle=state.get("grad_angle") or "vertical",
                      zoom=round(float(state.get("zoom") or 1.0), 3),
                      offset=[round(float(state.get("offset", [0.0, 0.0])[0]), 3),
                              round(float(state.get("offset", [0.0, 0.0])[1]), 3)],

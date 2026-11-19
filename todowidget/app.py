@@ -18,8 +18,8 @@ except Exception:
 from .paths import APP_DIR, CONF_FILE
 from .store import Store
 from . import theme as T
-from .theme import (P, apply_palette, custom_scheme, hex_to_rgb, pick_font,
-                    set_theme)
+from .theme import (P, apply_palette, custom_scheme, hex_to_rgb, mix_color,
+                    pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
 
 if HAS_TRAY:
@@ -65,6 +65,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_photo = None
         self._skin_size = None
         self._skin_region_size = None
+        self._skin_crop_job = None
+        self._skin_source = None
+        self._skin_source_path = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
@@ -159,8 +162,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._theme_image = ""
         custom = self.custom_theme()
         if custom is not None:
-            apply_palette(custom_scheme(custom.get("bg") or "#17181d",
-                                        custom.get("accent") or "#5b9cff"))
+            bg = custom.get("bg") or "#17181d"
+            if (custom.get("mode") or "") == "gradient":
+                bg = mix_color(custom.get("grad_start") or bg,
+                               custom.get("grad_end") or bg, 0.5)
+            apply_palette(custom_scheme(bg, custom.get("accent") or "#5b9cff"))
             self._theme_image = custom.get("image") or ""
         else:
             set_theme(self.theme, self.accent)
@@ -176,6 +182,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_photo = None
         self._skin_size = None
         self._skin_region_size = None
+        self._skin_crop_job = None
         r = self.root
         is_desktop = self.mode == "desktop"
         r.title("待办清单")
@@ -284,8 +291,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             move_y = abs(e.y_root - self._drag_from[1])
             if move_x > 3 or move_y > 3:
                 self._drag_moved = True
-            r.geometry("+{}+{}".format(e.x_root - self._drag[0],
-                                       e.y_root - self._drag[1]))
+            target_x = e.x_root - self._drag[0]
+            target_y = e.y_root - self._drag[1]
+            r.geometry("+{}+{}".format(target_x, target_y))
+            self.sync_skin(x=target_x, y=target_y)
 
         def end_drag(e, as_click=False):
             moved = getattr(self, "_drag_moved", False)
@@ -913,6 +922,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if not target:
             return
         self.root.geometry("{}x{}".format(target[0], target[1]))
+        self.sync_skin(target[0], target[1])
+        self.schedule_skin_crop()
 
     def end_resize(self, e):
         """松手: 把新的宽高记进配置"""
@@ -1010,15 +1021,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def on_win_configure(self, e):
         if e.widget is not self.root:
             return
-        # 挪窗口(尺寸没变)也要让图片窗口跟上, 不然图片会留在原地
+        # 挪窗口/改大小都用事件里的坐标立刻同步, 不然图片会慢半拍
         if self.skin_win is not None:
-            self.sync_skin()
+            self.sync_skin(e.width, e.height, e.x, e.y)
         if getattr(self, "_win_size", None) == (e.width, e.height):
             return
         self._win_size = (e.width, e.height)
         self.fit_width(e.width)
         if self.skin_win is not None:
-            self.root.after(160, self.refresh_skin_crop)
+            self.schedule_skin_crop()
         # 动画每帧自己更新圆角区域, 拖动改大小时也别每帧重切, 不然更闪
         if not self._animating and not self._resizing:
             self.root.after(15, self.round_window)
@@ -1026,18 +1037,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     # ---------------- 图片皮肤 ----------------
 
     def skin_spec(self):
-        """当前是不是图片皮肤; 是的话返回那份自定义配色"""
+        """当前是不是图片/渐变皮肤; 是的话返回那份自定义配色"""
         if not HAS_TRAY:
             return None
         custom = self.custom_theme()
         if custom is None:
             return None
         mode = custom.get("mode") or ("image" if custom.get("image") else "solid")
-        if mode != "image" or not custom.get("image"):
-            return None
-        if not self.bg_image_path():
-            return None
-        return custom
+        if mode == "gradient":
+            return custom
+        if mode == "image" and custom.get("image") and self.bg_image_path():
+            return custom
+        return None
 
     def skin_hwnd(self):
         """皮肤窗口的原生句柄"""
@@ -1052,8 +1063,51 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         user32 = ctypes.windll.user32
         return user32.GetParent(self.root.winfo_id()) or self.root.winfo_id()
 
+    def skin_source_image(self, path):
+        """读一次图片, 缩到 1600 以内缓存起来, 反复裁的时候快
+
+        :param path: 图片路径
+        """
+        if self._skin_source is not None and self._skin_source_path == path:
+            return self._skin_source
+        from PIL import Image
+        image = Image.open(path).convert("RGB")
+        image.thumbnail((1600, 1600), Image.LANCZOS)
+        self._skin_source = image
+        self._skin_source_path = path
+        return image
+
+    def gradient_image(self, spec, width, height):
+        """按两个颜色和方向画一张渐变底图
+
+        :param spec: 自定义配色字典(取 grad_start / grad_end / grad_angle)
+        :param width: 目标宽
+        :param height: 目标高
+        """
+        from PIL import Image
+        start = hex_to_rgb(spec.get("grad_start") or "#1b2030")
+        end = hex_to_rgb(spec.get("grad_end") or "#2a2a40")
+        mid = tuple(int(round((start[i] + end[i]) / 2.0)) for i in range(3))
+        angle = spec.get("grad_angle") or "vertical"
+        if angle == "horizontal":
+            small = Image.new("RGB", (2, 1))
+            small.putpixel((0, 0), start)
+            small.putpixel((1, 0), end)
+        elif angle == "diagonal":
+            small = Image.new("RGB", (2, 2))
+            small.putpixel((0, 0), start)
+            small.putpixel((1, 0), mid)
+            small.putpixel((0, 1), mid)
+            small.putpixel((1, 1), end)
+        else:
+            small = Image.new("RGB", (1, 2))
+            small.putpixel((0, 0), start)
+            small.putpixel((0, 1), end)
+        target = (max(2, int(width)), max(2, int(height)))
+        return small.resize(target, Image.BILINEAR)
+
     def crop_skin_image(self, path, width, height, spec):
-        """把皮肤图按 cover + 缩放 + 偏移裁成窗口大小
+        """图片皮肤: 按 cover + 缩放 + 偏移裁成窗口大小
 
         :param path: 图片路径
         :param width: 目标宽
@@ -1061,14 +1115,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         :param spec: 自定义配色字典(取 zoom / offset)
         """
         from PIL import Image
-        image = Image.open(path).convert("RGB")
+        image = self.skin_source_image(path)
         zoom = float(spec.get("zoom") or 1.0)
         zoom = max(1.0, min(3.0, zoom))
         scale = max(width / float(image.width),
                     height / float(image.height)) * zoom
         new_w = max(width, int(round(image.width * scale)))
         new_h = max(height, int(round(image.height * scale)))
-        image = image.resize((new_w, new_h), Image.LANCZOS)
+        image = image.resize((new_w, new_h), Image.BILINEAR)
         offset = spec.get("offset") or [0.0, 0.0]
         offset_x = max(-1.0, min(1.0, float(offset[0])))
         offset_y = max(-1.0, min(1.0, float(offset[1])))
@@ -1078,8 +1132,23 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         top = int(round((offset_y + 1.0) / 2.0 * span_y))
         return image.crop((left, top, left + width, top + height))
 
+    def skin_base_image(self, spec, width, height):
+        """按皮肤模式拿底图: 图片裁一块, 渐变现画一张
+
+        :param spec: 自定义配色字典
+        :param width: 目标宽
+        :param height: 目标高
+        """
+        mode = spec.get("mode") or ("image" if spec.get("image") else "solid")
+        if mode == "gradient":
+            return self.gradient_image(spec, width, height)
+        path = self.bg_image_path()
+        if not path:
+            return None
+        return self.crop_skin_image(path, width, height, spec)
+
     def make_skin(self):
-        """建一块只显示图片的窗口, 垫在主窗口下面"""
+        """建一块只显示皮肤的窗口, 垫在主窗口下面"""
         if self.skin_spec() is None:
             self.destroy_skin()
             return
@@ -1102,7 +1171,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.sync_skin()
 
     def destroy_skin(self):
-        """去掉图片皮肤窗口"""
+        """去掉皮肤窗口"""
+        if self._skin_crop_job is not None:
+            try:
+                self.root.after_cancel(self._skin_crop_job)
+            except Exception:
+                pass
+            self._skin_crop_job = None
         win = self.skin_win
         self.skin_win = None
         self.skin_label = None
@@ -1130,12 +1205,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
 
     def reload_skin_image(self):
-        """按窗口大小把皮肤图裁好"""
+        """按窗口大小把皮肤底图弄好"""
         win = self.skin_win
         spec = self.skin_spec()
         if win is None or spec is None:
             return
-        path = self.bg_image_path()
         width = max(40, self.root.winfo_width())
         height = max(40, self.root.winfo_height())
         if self.collapsed and self._expanded_size:
@@ -1145,7 +1219,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if self._skin_size == (width, height) and self.skin_photo is not None:
             return
         try:
-            image = self.crop_skin_image(path, width, height, spec)
+            image = self.skin_base_image(spec, width, height)
+            if image is None:
+                return
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
@@ -1154,7 +1230,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
 
     def refresh_skin_crop(self):
-        """窗口大小定下来以后重裁一次皮肤图"""
+        """窗口大小定下来以后重裁一次皮肤底图"""
         if self.skin_win is None or self._animating or self.collapsed:
             return
         width = max(40, self.root.winfo_width())
@@ -1164,11 +1240,26 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.reload_skin_image()
         self.sync_skin()
 
-    def sync_skin(self, width=None, height=None):
+    def schedule_skin_crop(self):
+        """拖动改大小时按 ~30fps 重裁, 别每个事件都算一遍"""
+        if self.skin_win is None or self._skin_crop_job is not None:
+            return
+        self._skin_crop_job = self.root.after(30, self.run_skin_crop)
+
+    def run_skin_crop(self):
+        """到点重裁一次皮肤底图"""
+        self._skin_crop_job = None
+        if self.skin_win is None:
+            return
+        self.refresh_skin_crop()
+
+    def sync_skin(self, width=None, height=None, x=None, y=None):
         """让皮肤窗口跟着主窗口的位置/大小, 并压在主窗口下面
 
         :param width: 可见宽度(动画时传当前帧的值)
         :param height: 可见高度
+        :param x: 主窗口左上角屏幕坐标, 不传就现取
+        :param y: 同上
         """
         win = self.skin_win
         if win is None:
@@ -1184,9 +1275,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
             if self._skin_region_size != size:
                 self.clip_skin(width, height)
-            x = root.winfo_rootx()
-            y = root.winfo_rooty()
-            win.geometry("{}x{}+{}+{}".format(size[0], size[1], x, y))
+            if x is None:
+                x = root.winfo_rootx()
+            if y is None:
+                y = root.winfo_rooty()
+            win.geometry("{}x{}+{}+{}".format(size[0], size[1], int(x), int(y)))
             self.place_skin_below()
         except Exception:
             pass
