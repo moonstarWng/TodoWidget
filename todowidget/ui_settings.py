@@ -82,8 +82,8 @@ class SettingsMixin:
 
         width, height = 560, 500
         if pos is None:
-            x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
-            y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
+            # 直接摆到主窗口那块屏幕的正中间
+            x, y = self.screen_center(width, height)
         else:
             x, y = pos
         left, top, right, bottom = self.settings_bounds()
@@ -96,6 +96,11 @@ class SettingsMixin:
         win.after(30, lambda w=win: round_corners(w, 12))
         win.lift()
         win.focus_force()
+        # 模态: 设置关掉之前, 点主界面不会起作用
+        try:
+            win.grab_set()
+        except Exception:
+            pass
 
     def build_settings_head(self, body):
         """窗口顶栏: 标题 + 关闭按钮, 按住可以挪窗口"""
@@ -142,10 +147,14 @@ class SettingsMixin:
         return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
     def close_settings(self):
-        """关掉设置窗口"""
+        """关掉设置窗口, 顺便把模态抓取放开"""
         win = self.settings_win
         self.settings_win = None
         if win is not None:
+            try:
+                win.grab_release()
+            except Exception:
+                pass
             try:
                 win.destroy()
             except Exception:
