@@ -11,9 +11,12 @@ import uuid
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
 try:
-    from PIL import Image, ImageTk
+    from PIL import Image, ImageFilter, ImageFont, ImageGrab, ImageTk
 except Exception:
     Image = None
+    ImageFilter = None
+    ImageFont = None
+    ImageGrab = None
     ImageTk = None
 
 from . import updater
@@ -311,6 +314,99 @@ class SettingsMixin:
             chip.configure(bg=P.accent if chosen else P.bg_alt,
                            fg=best_text_color(P.accent) if chosen else P.fg_dim)
 
+    def pick_screen_color(self, parent, on_pick):
+        """全屏吸管: 在屏幕上点一下, 取那个像素的颜色
+
+        先抓一张全屏截图当底, 点了直接在图里取像素, 所以在别的窗口、
+        网页、图片上都能取。
+
+        :param parent: 父窗口
+        :param on_pick: 取到颜色后的回调, 参数是 '#rrggbb'
+        """
+        if Image is None or ImageTk is None:
+            return
+        try:
+            shot = ImageGrab.grab(all_screens=True)
+        except Exception:
+            return
+        win = tk.Toplevel(parent)
+        win.withdraw()
+        win.overrideredirect(True)
+        win.attributes("-topmost", True)
+        win.configure(bg="#000000")
+        # 铺满整个虚拟桌面: 尺寸直接按截图来, 位置用虚拟桌面的原点
+        vx = win.winfo_vrootx()
+        vy = win.winfo_vrooty()
+        vw = max(200, shot.width)
+        vh = max(200, shot.height)
+        win.geometry("{}x{}+{}+{}".format(vw, vh, vx, vy))
+        canvas = tk.Canvas(win, width=vw, height=vh, highlightthickness=0,
+                           bd=0, cursor="crosshair")
+        canvas.pack()
+        photo = ImageTk.PhotoImage(shot)
+        canvas.create_image(0, 0, anchor="nw", image=photo)
+        canvas.image = photo
+        canvas.create_rectangle(0, 0, vw, vh, fill="#000000", outline="",
+                                stipple="gray25")
+        canvas.create_text(vw // 2, 26, text="点一下取色 · Esc 取消",
+                           fill="#ffffff", font=self.f_small)
+        ring = canvas.create_rectangle(0, 0, 0, 0, outline="#ffffff", width=2)
+        chip = canvas.create_rectangle(0, 0, 0, 0, outline="#ffffff")
+        label = canvas.create_text(0, 0, text="", fill="#ffffff", anchor="nw",
+                                   font=self.f_small)
+
+        def sample(ev):
+            """按光标位置取色并更新放大镜
+
+            :param ev: 鼠标事件
+            """
+            x = max(0, min(shot.width - 1, ev.x_root - vx))
+            y = max(0, min(shot.height - 1, ev.y_root - vy))
+            try:
+                rgb = shot.getpixel((x, y))[:3]
+            except Exception:
+                return None
+            color = "#{:02x}{:02x}{:02x}".format(*rgb)
+            px, py = ev.x_root - vx, ev.y_root - vy
+            canvas.coords(ring, px - 7, py - 7, px + 7, py + 7)
+            canvas.coords(chip, px + 16, py + 12, px + 40, py + 36)
+            canvas.itemconfigure(chip, fill=color)
+            canvas.coords(label, px + 46, py + 14)
+            canvas.itemconfigure(label, text=color)
+            return color
+
+        def close():
+            """关掉吸管"""
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            try:
+                win.destroy()
+            except Exception:
+                pass
+
+        def on_click(ev):
+            color = sample(ev)
+            close()
+            if color:
+                try:
+                    on_pick(color)
+                except Exception:
+                    pass
+
+        canvas.bind("<Button-1>", on_click)
+        canvas.bind("<Motion>", sample)
+        canvas.bind("<Button-3>", lambda ev: close())
+        win.bind("<Escape>", lambda ev: close())
+        win.deiconify()
+        win.lift()
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+        win.focus_force()
+
     def settings_note(self, parent, text):
         """一行灰色小字说明"""
         label = tk.Label(parent, text=text, bg=P.bg, fg=P.fg_faint,
@@ -383,21 +479,6 @@ class SettingsMixin:
         self.settings_chip(holder, "隐藏", not self.show_stat,
                            lambda: self.choose_show_stat(False),
                            group="stat", value=False)
-
-        holder = self.settings_block(
-            panel, "列表底图",
-            "图片皮肤时列表区怎么处理：磨砂是半透明膜，纯色铺不透明底色，"
-            "不铺就直接看原图（字会有点毛边）")
-        self.settings_chip(holder, "磨砂", self.scrim_mode == "frost",
-                           lambda: self.choose_scrim_mode("frost"),
-                           group="scrim", value="frost")
-        self.settings_chip(holder, "纯色", self.scrim_mode == "solid",
-                           lambda: self.choose_scrim_mode("solid"),
-                           group="scrim", value="solid")
-        self.settings_chip(holder, "不铺", self.scrim_mode == "off",
-                           lambda: self.choose_scrim_mode("off"),
-                           group="scrim", value="off")
-
 
     THEME_CELL_WIDTH = 78
     THEME_CELL_HEIGHT = 50
@@ -581,18 +662,6 @@ class SettingsMixin:
         self.fit_width(self.root.winfo_width())
         self.restyle_group("stat", self.show_stat)
 
-    def choose_scrim_mode(self, mode):
-        """图片皮肤列表区怎么画: frost 磨砂 / solid 纯色 / off 不铺
-
-        :param mode: 目标模式
-        """
-        if mode not in ("frost", "solid", "off") or mode == self.scrim_mode:
-            return
-        self.scrim_mode = mode
-        self.save_conf()
-        self.restyle_group("scrim", self.scrim_mode)
-        self.refresh_skin_film()
-
     def choose_theme(self, key):
         """换配色(整块界面重建)"""
         if key == self.theme:
@@ -655,6 +724,7 @@ class SettingsMixin:
             "grad_end": existing.get("grad_end") or "#3a2a52",
             "grad_angle": existing.get("grad_angle") or "vertical",
             "fg": existing.get("fg") or "",
+            "scrim_mode": existing.get("scrim") or "frost",
             "border_mode": (existing.get("border") or {}).get("mode") or "none",
             "border_width": int((existing.get("border") or {}).get("width") or 2),
             "border_color": (existing.get("border") or {}).get("color") or "#3b7cf6",
@@ -720,6 +790,20 @@ class SettingsMixin:
             tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
                      font=self.f_small, anchor="w", width=width).pack(side="left")
             return line
+
+        def dropper(parent, callback):
+            """一行里放个吸管按钮, 点了进全屏取色
+
+            :param parent: 放在哪一行
+            :param callback: 取到颜色后怎么用
+            """
+            btn = tk.Label(parent, text="吸管", bg=P.bg, fg=P.fg_faint,
+                           font=self.f_small, padx=6, cursor="hand2")
+            btn.pack(side="left", padx=(4, 0))
+            btn.bind("<Button-1>",
+                     lambda ev: self.pick_screen_color(win, callback))
+            return btn
+
 
         name_row = row(form, "名称")
         name_var = tk.StringVar(value=existing.get("name") or
@@ -794,9 +878,9 @@ class SettingsMixin:
             win_h = self.root.winfo_height() or 460
         except Exception:
             win_w, win_h = 330, 460
-        ph = 210
+        ph = 236
         pw = int(round(ph * float(win_w) / float(win_h)))
-        pw = max(110, min(190, pw))
+        pw = max(120, min(214, pw))
 
         # 图片模式: 图片 + 拖动裁剪 + 缩放 + 透明度
         image_frame = tk.Frame(mode_area, bg=P.bg)
@@ -828,8 +912,9 @@ class SettingsMixin:
         zoom_row = row(image_frame, "缩放", width=6)
         zoom_scale = tk.Scale(zoom_row, from_=100, to=250, resolution=5,
                               orient="horizontal", bg=P.bg, fg=P.fg_dim,
-                              troughcolor=P.bg_alt, highlightthickness=0, bd=0,
-                              sliderrelief="flat", showvalue=False, length=220,
+                              troughcolor=P.bg_alt, highlightthickness=1,
+                              highlightbackground=P.border, bd=0,
+                              sliderrelief="flat", showvalue=False, length=200,
                               command=lambda v: set_zoom(v))
         zoom_scale.pack(side="left")
         zoom_value = tk.Label(zoom_row, text="{}%".format(int(state["zoom"] * 100)),
@@ -839,8 +924,9 @@ class SettingsMixin:
         alpha_row = row(form, "透明度", width=6)
         alpha_scale = tk.Scale(alpha_row, from_=0, to=60, resolution=5,
                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
-                               troughcolor=P.bg_alt, highlightthickness=0, bd=0,
-                               sliderrelief="flat", showvalue=False, length=220,
+                               troughcolor=P.bg_alt, highlightthickness=1,
+                               highlightbackground=P.border, bd=0,
+                               sliderrelief="flat", showvalue=False, length=200,
                                command=lambda v: set_alpha(v))
         alpha_scale.pack(side="left")
         alpha_value = tk.Label(alpha_row,
@@ -881,6 +967,7 @@ class SettingsMixin:
                                font=self.f_small, padx=6, pady=2, cursor="hand2")
         fg_auto_btn.pack(side="left")
         fg_auto_btn.bind("<Button-1>", lambda ev: reset_fg())
+        dropper(fg_row, lambda c: apply_fg(c))
         fg_row.pack(fill="x")
 
         accent_row = row(right, "强调色")
@@ -894,9 +981,27 @@ class SettingsMixin:
                               cursor="hand2")
         accent_btn.pack(side="left", padx=8)
         accent_btn.bind("<Button-1>", lambda ev: pick_accent())
+        dropper(accent_row, lambda c: apply_accent(c))
+
+        # ---- 列表底图(跟着配色走) ----
+        tk.Frame(right, bg=P.border, height=1).pack(fill="x", pady=(4, 10))
+        tk.Label(right, text="列表底图", bg=P.bg, fg=P.fg,
+                 font=self.f_group).pack(anchor="w")
+        tk.Label(right, text="图片皮肤时列表区怎么画",
+                 bg=P.bg, fg=P.fg_dim, font=self.f_small,
+                 anchor="w").pack(fill="x", pady=(2, 0))
+        scrim_row = tk.Frame(right, bg=P.bg)
+        scrim_row.pack(fill="x", pady=(6, 10))
+        scrim_chips = {}
+        for key, label in (("frost", "磨砂"), ("solid", "纯色"),
+                           ("off", "不铺")):
+            chip = tk.Label(scrim_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=12, pady=5, cursor="hand2")
+            chip.pack(side="left", padx=(0, 8))
+            chip.bind("<Button-1>", lambda ev, k=key: set_scrim(k))
+            scrim_chips[key] = chip
 
         # ---- 边框 / 顶栏底栏(这些跟着配色走) ----
-        tk.Frame(right, bg=P.border, height=1).pack(fill="x", pady=(4, 10))
         tk.Label(right, text="边框", bg=P.bg, fg=P.fg,
                  font=self.f_group).pack(anchor="w")
         border_row = tk.Frame(right, bg=P.bg)
@@ -917,7 +1022,8 @@ class SettingsMixin:
                  font=self.f_small, width=6, anchor="w").pack(side="left")
         border_scale = tk.Scale(width_row, from_=1, to=6, resolution=1,
                                 orient="horizontal", bg=P.bg, fg=P.fg_dim,
-                                troughcolor=P.bg_alt, highlightthickness=0,
+                                troughcolor=P.bg_alt, highlightthickness=1,
+                                highlightbackground=P.border,
                                 bd=0, sliderrelief="flat", showvalue=False,
                                 length=150,
                                 command=lambda v: set_border_width(v))
@@ -941,6 +1047,7 @@ class SettingsMixin:
         border_swatch2.pack(side="left", padx=(6, 0))
         border_swatch2.pack_propagate(False)
         border_swatch2.bind("<Button-1>", lambda ev: pick_border(2))
+        dropper(color_row, lambda c: apply_border_color(c))
 
         tk.Label(right, text="顶栏 / 底栏", bg=P.bg, fg=P.fg,
                  font=self.f_group).pack(anchor="w", pady=(14, 0))
@@ -963,6 +1070,7 @@ class SettingsMixin:
                             font=self.f_small, padx=10, pady=4, cursor="hand2")
             chip.pack(side="left", padx=(10, 0))
             chip.bind("<Button-1>", lambda ev, k=key: toggle_split(k))
+            dropper(line, lambda c, k=key: apply_bar_color(k, c))
             bar_rows[key] = (swatch, chip)
 
         note = tk.Label(
@@ -983,6 +1091,7 @@ class SettingsMixin:
                 bg_swatch.configure(bg=picked)
                 if not state["fg"]:
                     fg_swatch.configure(bg=auto_text_color(auto_bg()))
+                refresh_preview()
 
         def pick_fg():
             _, picked = colorchooser.askcolor(
@@ -991,10 +1100,12 @@ class SettingsMixin:
             if picked:
                 state["fg"] = picked
                 fg_swatch.configure(bg=picked)
+                refresh_preview()
 
         def reset_fg():
             state["fg"] = ""
             fg_swatch.configure(bg=auto_text_color(auto_bg()))
+            refresh_preview()
 
         def pick_accent():
             _, picked = colorchooser.askcolor(color=state["accent"], parent=win,
@@ -1002,6 +1113,7 @@ class SettingsMixin:
             if picked:
                 state["accent"] = picked
                 accent_swatch.configure(bg=picked)
+                refresh_preview()
 
         def pick_grad(which):
             """渐变模式选起始色 / 结束色"""
@@ -1053,6 +1165,40 @@ class SettingsMixin:
             image_label.config(text="没有")
             render_preview()
 
+        def apply_fg(color):
+            """吸管取到的文字色"""
+            state["fg"] = color
+            fg_swatch.configure(bg=color)
+            refresh_preview()
+
+        def apply_accent(color):
+            """吸管取到的强调色"""
+            state["accent"] = color
+            accent_swatch.configure(bg=color)
+            refresh_preview()
+
+        def apply_border_color(color):
+            """吸管取到的边框色(先用主色)"""
+            state["border_color"] = color
+            border_swatch.configure(bg=color)
+            refresh_preview()
+
+        def apply_bar_color(key, color):
+            """吸管取到的顶栏/底栏颜色"""
+            state[key + "_color"] = color
+            bar_rows[key][0].configure(bg=color)
+            refresh_preview()
+
+        def set_scrim(key):
+            """列表底图三档"""
+            state["scrim_mode"] = key
+            for chip_key, chip in scrim_chips.items():
+                chosen = (chip_key == key)
+                chip.configure(bg=P.accent if chosen else P.bg_alt,
+                               fg=best_text_color(P.accent) if chosen
+                               else P.fg_dim)
+            refresh_preview()
+
         def set_border_mode(key):
             """边框三选一"""
             state["border_mode"] = key
@@ -1061,6 +1207,7 @@ class SettingsMixin:
                 chip.configure(bg=P.accent if chosen else P.bg_alt,
                                fg=best_text_color(P.accent) if chosen
                                else P.fg_dim)
+            refresh_preview()
 
         def set_border_width(value):
             """拖边框粗细"""
@@ -1068,6 +1215,7 @@ class SettingsMixin:
                 state["border_width"] = max(1, min(6, int(float(value))))
             except Exception:
                 pass
+            refresh_preview()
 
         def pick_border(which):
             """选边框颜色; which=1 主色, 2 渐变的第二个色"""
@@ -1081,6 +1229,7 @@ class SettingsMixin:
                 border_swatch.configure(bg=picked)
             else:
                 border_swatch2.configure(bg=picked)
+            refresh_preview()
 
         def paint_split(key):
             """刷新"单独上色"按钮的选中态"""
@@ -1093,6 +1242,7 @@ class SettingsMixin:
             """顶栏 / 底栏 是否单独上色"""
             state[key + "_split"] = not bool(state[key + "_split"])
             paint_split(key)
+            refresh_preview()
 
         def pick_bar(key):
             """选顶栏 / 底栏的颜色"""
@@ -1103,6 +1253,7 @@ class SettingsMixin:
                 return
             state[field] = picked
             bar_rows[key][0].configure(bg=picked)
+            refresh_preview()
 
         def set_mode(key):
             state["mode"] = key
@@ -1144,6 +1295,7 @@ class SettingsMixin:
 
         def set_alpha(value):
             state["alpha"] = max(0.0, min(0.6, float(value) / 100.0))
+            refresh_preview()
             alpha_value.config(
                 text="{}%".format(int(round(state["alpha"] * 100))))
 
@@ -1159,39 +1311,151 @@ class SettingsMixin:
             zoom_scale.set(value)
             return "break"
 
+        preview_job = {"id": None}
+        font_dir = "C:/Windows/Fonts/"
+
+        def preview_font(size, bold=False):
+            """挑一个能给 PIL 用的雅黑, 拿不到就返回 None"""
+            if ImageFont is None:
+                return None
+            names = ("msyhbd.ttc", "msyh.ttc") if bold else ("msyh.ttc",)
+            for name in names:
+                try:
+                    return ImageFont.truetype(font_dir + name, size, index=1)
+                except Exception:
+                    continue
+            return None
+
+        def draw_mock(mock):
+            """在小样上补上顶栏/底栏/列表底图/边框/示例行
+
+            :param mock: 已经画好底色的图(RGB)
+            """
+            from PIL import ImageDraw
+            draw = ImageDraw.Draw(mock, "RGBA")
+            w, h = mock.size
+            # 图片模式下"底色"其实是图上的平均色, 算一次给面板/分组条用
+            base_color = auto_bg()
+            head_h = max(12, int(round(h * 0.085)))
+            tab_h = max(10, int(round(h * 0.07)))
+            foot_h = max(10, int(round(h * 0.075)))
+            body_top = head_h + tab_h
+            body_bottom = h - foot_h
+            panel = mix_color(base_color, "#000000", 0.05)
+            # 列表底图
+            if state["scrim_mode"] == "solid":
+                draw.rectangle([0, head_h, w, body_bottom], fill=panel)
+            elif state["scrim_mode"] == "frost":
+                box = (0, head_h, w, body_bottom)
+                region = mock.crop(box)
+                small = region.resize((max(2, w // 6), max(2, (body_bottom - head_h) // 6)),
+                                      Image.BILINEAR)
+                small = small.filter(ImageFilter.GaussianBlur(1.6))
+                frost = small.resize(region.size, Image.BILINEAR)
+                frost = Image.blend(frost, Image.new("RGB", region.size, panel), 0.3)
+                mock.paste(frost, box[:2])
+                draw = ImageDraw.Draw(mock, "RGBA")
+            # 顶栏 / 底栏
+            if state["header_split"]:
+                draw.rectangle([0, 0, w, head_h], fill=state["header_color"])
+            if state["footer_split"]:
+                draw.rectangle([0, body_bottom, w, h], fill=state["footer_color"])
+            # 示例行
+            fg = state["fg"] or auto_text_color(auto_bg())
+            small_font = preview_font(9)
+            tiny_font = preview_font(8)
+            y = body_top + 4
+            row_h = max(11, int(round(h * 0.055)))
+            draw.rectangle([2, y, w - 2, y + row_h - 2],
+                           fill=mix_color(base_color, fg, 0.10))
+            if small_font is not None:
+                draw.text((6, y + 1), "开始使用 · 0/3", font=small_font, fill=fg)
+            for i, label in enumerate(("点左边的框勾选", "双击任务写便签")):
+                y += row_h
+                box = [6, y + 2, 14, y + 10]
+                draw.rounded_rectangle(box, radius=2, outline=fg, width=1)
+                if small_font is not None:
+                    draw.text((18, y), label, font=small_font, fill=fg)
+            # 页签
+            if tiny_font is not None:
+                draw.text((8, head_h + 3), "未完成", font=tiny_font,
+                          fill=state["accent"])
+                draw.text((int(w * 0.38), head_h + 3), "已完成",
+                          font=tiny_font, fill=mix_color(fg, state["bg"], 0.4))
+            # 边框: 直接借用真实那套画法, 圆角跟窗口一致
+            if state["border_mode"] != "none":
+                keep = (self.border_mode, self.border_width,
+                        self.border_color, self.border_color2)
+                self.border_mode = state["border_mode"]
+                self.border_width = max(1, min(6, int(state["border_width"])))
+                self.border_color = state["border_color"]
+                self.border_color2 = state["border_color2"]
+                try:
+                    mock = self.apply_border(mock, None, scale=2)
+                except Exception:
+                    pass
+                finally:
+                    (self.border_mode, self.border_width,
+                     self.border_color, self.border_color2) = keep
+            return mock
+
         def render_preview():
+            """按当前设置画一张小样(底图 + 顶底栏 + 列表底图 + 边框 + 示例行)"""
             preview.delete("all")
-            if not state["image"] or Image is None:
-                preview.create_text(pw // 2, ph // 2,
-                                    text="选一张图片后在这里拖动调整位置",
-                                    fill=P.fg_faint, font=self.f_small)
+            if Image is None:
                 return
-            path = image_path()
-            if not path:
-                return
-            try:
-                image = state.get("_pil")
-                if image is None:
-                    image = Image.open(path).convert("RGB")
-                    image.thumbnail((1600, 1600), Image.LANCZOS)
-                    state["_pil"] = image
-                zoom = max(1.0, min(3.0, float(state["zoom"])))
-                scale = max(pw / float(image.width),
-                            ph / float(image.height)) * zoom
-                new_w = max(pw, int(round(image.width * scale)))
-                new_h = max(ph, int(round(image.height * scale)))
-                scaled = image.resize((new_w, new_h), Image.BILINEAR)
-                span_x = new_w - pw
-                span_y = new_h - ph
-                left = int(round((state["offset"][0] + 1.0) / 2.0 * span_x))
-                top = int(round((state["offset"][1] + 1.0) / 2.0 * span_y))
-                crop = scaled.crop((left, top, left + pw, top + ph))
-                photo = ImageTk.PhotoImage(crop)
-                preview.create_image(0, 0, anchor="nw", image=photo)
-                preview.image = photo
-                state["_span"] = (span_x, span_y)
-            except Exception:
-                pass
+            mock = None
+            state["_span"] = (0, 0)
+            if state["mode"] == "image" and state["image"]:
+                path = image_path()
+                if path:
+                    try:
+                        image = state.get("_pil")
+                        if image is None:
+                            image = Image.open(path).convert("RGB")
+                            image.thumbnail((1600, 1600), Image.LANCZOS)
+                            state["_pil"] = image
+                        zoom = max(1.0, min(3.0, float(state["zoom"])))
+                        scale = max(pw / float(image.width),
+                                    ph / float(image.height)) * zoom
+                        new_w = max(pw, int(round(image.width * scale)))
+                        new_h = max(ph, int(round(image.height * scale)))
+                        scaled = image.resize((new_w, new_h), Image.BILINEAR)
+                        span_x = new_w - pw
+                        span_y = new_h - ph
+                        left = int(round((state["offset"][0] + 1.0) / 2.0 * span_x))
+                        top = int(round((state["offset"][1] + 1.0) / 2.0 * span_y))
+                        mock = scaled.crop((left, top, left + pw, top + ph))
+                        state["_span"] = (span_x, span_y)
+                    except Exception:
+                        mock = None
+            if mock is None:
+                if state["mode"] == "gradient":
+                    mock = self.gradient_image(
+                        {"grad_start": state["grad_start"],
+                         "grad_end": state["grad_end"],
+                         "grad_angle": state["grad_angle"]}, pw, ph)
+                else:
+                    mock = Image.new("RGB", (pw, ph), state["bg"])
+            else:
+                mock = mock.copy()
+            mock = draw_mock(mock)
+            photo = ImageTk.PhotoImage(mock)
+            preview.create_image(0, 0, anchor="nw", image=photo)
+            preview.image = photo
+
+        def refresh_preview():
+            """改一下看一次: 攒 90ms 再画, 别拖滑块时一直重画"""
+            if preview_job["id"] is not None:
+                try:
+                    win.after_cancel(preview_job["id"])
+                except Exception:
+                    pass
+            preview_job["id"] = win.after(90, run_preview)
+
+        def run_preview():
+            preview_job["id"] = None
+            render_preview()
 
         preview_drag = {}
 
@@ -1241,6 +1505,7 @@ class SettingsMixin:
         zoom_scale.set(int(round(state["zoom"] * 100)))
         alpha_scale.set(int(round(state["alpha"] * 100)))
         set_angle(state["grad_angle"])
+        set_scrim(state["scrim_mode"])
         set_border_mode(state["border_mode"])
         border_scale.set(int(state["border_width"]))
         paint_split("header")
@@ -1307,6 +1572,7 @@ class SettingsMixin:
                      offset=[round(float(state.get("offset", [0.0, 0.0])[0]), 3),
                              round(float(state.get("offset", [0.0, 0.0])[1]), 3)],
                      alpha=round(float(state.get("alpha") or 0.0), 3),
+                     scrim=state.get("scrim_mode") or "frost",
                      border=dict(mode=state.get("border_mode") or "none",
                                  width=int(state.get("border_width") or 2),
                                  color=state.get("border_color") or "#3b7cf6",

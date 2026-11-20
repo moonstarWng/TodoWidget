@@ -152,7 +152,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                          theme=self.theme, accent=self.accent,
                          resize_locked=bool(self.resize_locked),
                          show_stat=bool(self.show_stat),
-                         scrim_mode=self.scrim_mode,
                          themes=self.custom_themes)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -237,6 +236,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             P.fg_dim = mix_color(P.fg, P.bg, 0.22)
             P.fg_faint = mix_color(P.fg, P.bg, 0.45)
         extras = self.theme_extras()
+        self.scrim_mode = extras["scrim_mode"]
         self.border_mode = extras["border_mode"]
         self.border_width = extras["border_width"]
         self.border_color = extras["border_color"]
@@ -1169,7 +1169,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         内置配色没有这些, 就是"不画边框、顶栏底栏跟列表一体";
         自定义配色把它们存在自己身上。
         """
-        defaults = {"border_mode": "none", "border_width": 2,
+        defaults = {"scrim_mode": "frost",
+                    "border_mode": "none", "border_width": 2,
                     "border_color": "#3b7cf6", "border_color2": "#8a5cf6",
                     "header_split": False, "header_color": "#17181d",
                     "footer_split": False, "footer_color": "#17181d"}
@@ -1178,7 +1179,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return defaults
         border = custom.get("border") or {}
         mode = border.get("mode")
+        scrim = custom.get("scrim")
         return {
+            "scrim_mode": scrim if scrim in ("frost", "solid", "off") else "frost",
             "border_mode": mode if mode in ("none", "solid", "gradient") else "none",
             "border_width": max(0, min(8, int(border.get("width") or 2))),
             "border_color": border.get("color") or "#3b7cf6",
@@ -1741,7 +1744,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         from PIL import Image
         return Image.new("RGB", (width, height), hex_to_rgb(self.border_color))
 
-    def apply_border(self, image, rect=None):
+    def apply_border(self, image, rect=None, scale=1):
         """在底图外围画一圈边框(圆角跟窗口一致)
 
         :param image: 已经处理好的底图(RGB)
@@ -1757,7 +1760,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width = max(2, right - left)
             height = max(2, bottom - top)
             thickness = max(1, min(8, int(self.border_width)))
-            radius = 10
+            radius = max(2, int(round(10 * (scale or 1))))
             scale = 2
 
             def mask(inset, rad):
