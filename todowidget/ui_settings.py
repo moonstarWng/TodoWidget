@@ -184,6 +184,7 @@ class SettingsMixin:
         self.close_theme_editor()
         win = self.settings_win
         self.settings_win = None
+        self._settings_chips = {}
         if win is not None:
             try:
                 win.grab_release()
@@ -303,7 +304,8 @@ class SettingsMixin:
 
     def restyle_group(self, group, value):
         """把某一组选项的选中态换成 value"""
-        for chip, chip_value in self._settings_chips.get(group, []):
+        chips = getattr(self, "_settings_chips", None) or {}
+        for chip, chip_value in chips.get(group, []):
             chosen = (chip_value == value)
             chip._chosen = chosen
             chip.configure(bg=P.accent if chosen else P.bg_alt,
@@ -381,6 +383,16 @@ class SettingsMixin:
         self.settings_chip(holder, "隐藏", not self.show_stat,
                            lambda: self.choose_show_stat(False),
                            group="stat", value=False)
+
+        holder = self.settings_block(
+            panel, "列表磨砂",
+            "图片皮肤时给列表加一层半透明膜，照片再花字也看得清")
+        self.settings_chip(holder, "加", self.scrim,
+                           lambda: self.choose_scrim(True),
+                           group="scrim", value=True)
+        self.settings_chip(holder, "不加", not self.scrim,
+                           lambda: self.choose_scrim(False),
+                           group="scrim", value=False)
 
     THEME_CELL_WIDTH = 78
     THEME_CELL_HEIGHT = 50
@@ -563,6 +575,16 @@ class SettingsMixin:
         self.update_stat(pending)
         self.fit_width(self.root.winfo_width())
         self.restyle_group("stat", self.show_stat)
+
+    def choose_scrim(self, value):
+        """图片皮肤列表上加不加那层磨砂膜
+
+        :param value: True 加, False 不加
+        """
+        self.scrim = bool(value)
+        self.save_conf()
+        self.restyle_group("scrim", self.scrim)
+        self.refresh_skin_film()
 
     def choose_theme(self, key):
         """换配色(整块界面重建)"""

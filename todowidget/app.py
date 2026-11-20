@@ -99,6 +99,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.accent = self.conf.get("accent") or None
         self.custom_themes = self.conf.get("themes") or []
         self.show_stat = bool(self.conf.get("show_stat", True))
+        # 图片皮肤时列表上那层磨砂半透明膜, 关掉就是原图直接透上来
+        self.scrim = bool(self.conf.get("scrim", True))
         self.bg_image = ""
         self._theme_image = ""
         self.settings_win = None
@@ -135,6 +137,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                          theme=self.theme, accent=self.accent,
                          resize_locked=bool(self.resize_locked),
                          show_stat=bool(self.show_stat),
+                         scrim=bool(self.scrim),
                          themes=self.custom_themes)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -249,6 +252,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.f_group_done = pick_font(r, 10, "bold", True)
         self.f_item = pick_font(r, 10)
         self.f_item_done = pick_font(r, 10, overstrike=True)
+        # 皮肤模式文字是压在底图上的, 加粗一点抗锯齿的边就不那么显糊
+        if self.skin_spec() is not None:
+            self.f_item_skin = pick_font(r, 10, "bold")
+            self.f_item_skin_done = pick_font(r, 10, "bold", True)
+            # 列表项加粗后跟分组一样重, 分组放大一号把层次找回来
+            self.f_group_skin = pick_font(r, 11, "bold")
+            self.f_group_skin_done = pick_font(r, 11, "bold", True)
+        else:
+            self.f_item_skin = self.f_item
+            self.f_item_skin_done = self.f_item_done
+            self.f_group_skin = self.f_group
+            self.f_group_skin_done = self.f_group_done
         self.f_small = pick_font(r, 8)
         self.f_note_h1 = pick_font(r, 13, "bold")
         self.f_note_h2 = pick_font(r, 11, "bold")
@@ -413,12 +428,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         # Treeview 的 tag 优先级跟定义顺序有关, 混着用会串色,
         # 所以每行的状态只用一个 tag, 悬停/拖放都是独立的一套
         base_cfg = {
-            "group": dict(font=self.f_group, foreground=P.group,
+            "group": dict(font=self.f_group_skin, foreground=P.group,
                           background=P.group_bg),
-            "group_done": dict(font=self.f_group_done, foreground=P.done,
+            "group_done": dict(font=self.f_group_skin_done, foreground=P.done,
                                background=P.group_bg),
-            "item": dict(font=self.f_item, foreground=P.fg),
-            "item_done": dict(font=self.f_item_done, foreground=P.done),
+            "item": dict(font=self.f_item_skin, foreground=P.fg),
+            "item_done": dict(font=self.f_item_skin_done, foreground=P.done),
         }
         for name, cfg in base_cfg.items():
             self.tree.tag_configure(name, **cfg)
@@ -1531,6 +1546,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         :param spec: 自定义配色字典
         """
         mode = spec.get("mode") or ("image" if spec.get("image") else "solid")
+        if not getattr(self, "scrim", True):
+            return 0.0
         # 渐变本身是干净的, 只有照片会把文字衬得看不清
         return 0.3 if mode == "image" else 0.0
 
@@ -1635,6 +1652,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if self._scrim_drawn:
             return False
         return self.skin_scrim_rect() is not None
+
+    def refresh_skin_film(self):
+        """列表加不加膜的配置改了: 立刻重铺一次底图"""
+        self._scrim_drawn = False
+        self._skin_size = None
+        if self.skin_win is not None:
+            self.reload_skin_image(force=True)
+            self.sync_skin()
 
     def refresh_skin_crop(self):
         """窗口大小定下来以后重裁一次皮肤底图"""
