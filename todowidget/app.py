@@ -1688,6 +1688,17 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return 0
         return max(1, int(self.border_width))
 
+    def corner_radius(self):
+        """窗口圆角半径
+
+        圆角半径比边框粗太多的话, 窗口区域会把边框在拐角处裁掉一大块
+        (看着就是边框断在圆角前)。有边框时按粗细收一点。
+        """
+        if not self.border_active():
+            return 10
+        thickness = max(1, min(8, int(self.border_width)))
+        return max(4, min(10, int(round(thickness * 2.0))))
+
     def border_active(self):
         """是不是要画边框"""
         return self.border_mode in ("solid", "gradient") and self.border_width > 0
@@ -1713,6 +1724,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
         self._frame_pad = pad
+        # 圆角半径跟边框粗细有关, 缓存作废才能按新半径重设区域
+        self._main_region_size = None
+        self._skin_region_size = None
         if self.collapsed:
             # 收起横条宽度是按顶栏内容算的, 留白变了要重新量一次
             folded_h = 42 + 2 * pad
@@ -1753,28 +1767,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if not self.border_active():
             return image
         try:
-            from PIL import Image, ImageChops, ImageDraw
+            from PIL import Image, ImageDraw
             left, top, right, bottom = rect or (0, 0) + image.size
             right = min(right, image.width)
             bottom = min(bottom, image.height)
             width = max(2, right - left)
             height = max(2, bottom - top)
             thickness = max(1, min(8, int(self.border_width)))
-            radius = max(2, int(round(10 * (scale or 1))))
-            scale = 2
-
-            def mask(inset, rad):
-                big = Image.new("L", (width * scale, height * scale), 0)
-                draw = ImageDraw.Draw(big)
-                x0 = inset * scale
-                draw.rounded_rectangle(
-                    [x0, x0, width * scale - 1 - x0, height * scale - 1 - x0],
-                    radius=max(0, rad) * scale, fill=255)
-                return big.resize((width, height), Image.LANCZOS)
-
-            outer = mask(0, radius)
-            inner = mask(thickness, max(1, radius - thickness))
-            ring = ImageChops.subtract(outer, inner)
+            # 外圈不用自己画圆角: 窗口区域就是圆的, 超出部分会被裁掉;
+            # 内圈是方形, 正好被卡片盖住 —— 这样圆角处不会出现半截边框
+            ring = Image.new("L", (width, height), 0)
+            ImageDraw.Draw(ring).rectangle(
+                [0, 0, width - 1, height - 1], outline=255, width=thickness)
             image.paste(self.border_fill(width, height), (left, top), ring)
         except Exception:
             pass
@@ -2307,7 +2311,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 return False
             w = max(2, int(width))
             h = max(2, int(height))
-            rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
+            radius = self.corner_radius() * 2
+            rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius)
             user32.SetWindowRgn(wrapper, rgn, True)
             return True
         except Exception:
@@ -2328,7 +2333,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             if not hwnd:
                 return
-            rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
+            radius = self.corner_radius() * 2
+            rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
+                0, 0, w + 1, h + 1, radius, radius)
             if ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True):
                 self._main_region_size = size
             else:
