@@ -18,6 +18,7 @@ except Exception:
 from .paths import APP_DIR, CONF_FILE
 from .store import Store
 from . import theme as T
+from .anim import Tween, ease_in_out_cubic, mix_hex
 from .theme import (P, GRADIENTS, apply_palette, custom_scheme, hex_to_rgb,
                     mix_color, pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
@@ -75,11 +76,16 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_avg = None
         self._skin_avg_path = None
         self._skin_stack_job = None
+        self._skin_sync_job = None
+        self._skin_geom = None
+        # 主窗口当前的圆角区域大小, 免得重复设
+        self._main_region_size = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
-        self._title_job = None
         self._title_target = None
+        self._title_tween = None
+        self._title_swapped = False
         self.tab = self.conf.get("tab", "pending")
         self.sort_mode = self.conf.get("sort_mode", "manual")
         self._day_open = {}
@@ -210,6 +216,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_avg = None
         self._skin_avg_path = None
         self._skin_stack_job = None
+        self._skin_sync_job = None
+        self._skin_geom = None
+        self._main_region_size = None
         self.apply_palette_choice()
         self.stop_title_fade()
         self._frozen = []
@@ -488,10 +497,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
 
         # 最小化/恢复、藏到托盘/再显示, 皮肤窗口都跟着主窗口走
-        r.bind("<Map>", lambda e: self.root.after_idle(self.sync_skin),
-               add="+")
-        r.bind("<Unmap>", lambda e: self.root.after_idle(self.sync_skin),
-               add="+")
+        r.bind("<Map>", lambda e: self.sync_skin_later(), add="+")
+        r.bind("<Unmap>", lambda e: self.sync_skin_later(), add="+")
         r.bind("<FocusOut>", self.on_focus_out)
         r.bind("<Button-1>", self.on_any_click, add="+")
         r.bind("<Configure>", self.on_win_configure, add="+")
@@ -575,7 +582,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         """左上角标题: 收起时固定显示"待办清单", 展开时显示当前清单名"""
         text, cursor = self.title_text()
         self.lbl_title.config(cursor=cursor)
-        if self._title_job is not None:
+        if self._title_tween is not None:
             # 正在淡出淡入, 让它到中间换字时再取最新文字
             self._title_target = text
             return
@@ -584,54 +591,49 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def stop_title_fade(self):
         """停掉还没跑完的标题淡化, 颜色恢复成正常"""
-        if self._title_job is not None:
-            try:
-                self.root.after_cancel(self._title_job)
-            except Exception:
-                pass
-            self._title_job = None
+        if self._title_tween is not None:
+            self._title_tween.stop()
+            self._title_tween = None
         self._title_target = None
+        self._title_swapped = False
         try:
             self.lbl_title.config(fg=P.fg)
         except Exception:
             pass
 
     def fade_title(self):
-        """标题先淡出, 换成当前该显示的文字, 再淡回来"""
+        """标题先淡出, 换成当前该显示的文字, 再淡回来
+
+        用按真实时间推进的补间(而不是固定几步), 中间帧够多, 看着才顺。
+        """
         text, cursor = self.title_text()
         self.lbl_title.config(cursor=cursor)
         self.stop_title_fade()
-        head = hex_to_rgb(P.head)
-        fg = hex_to_rgb(P.fg)
-        steps = 5
-        state = {"phase": "out", "step": 0}
-
-        def color(ratio):
-            parts = []
-            for i in range(3):
-                parts.append(int(round(fg[i] + (head[i] - fg[i]) * ratio)))
-            return "#{:02x}{:02x}{:02x}".format(*parts)
-
-        def tick():
-            state["step"] += 1
-            ratio = state["step"] / float(steps)
-            if state["phase"] == "out":
-                self.lbl_title.config(fg=color(ratio))
-                if state["step"] >= steps:
-                    state["phase"] = "in"
-                    state["step"] = 0
-                    self.lbl_title.config(text=self._title_target or text)
-            else:
-                self.lbl_title.config(fg=color(1.0 - ratio))
-                if state["step"] >= steps:
-                    self._title_job = None
-                    self._title_target = None
-                    self.lbl_title.config(fg=P.fg)
-                    return
-            self._title_job = self.root.after(16, tick)
-
+        # 皮肤模式下顶栏是透明的, 往透明色上淡才自然
+        backdrop = self.skin_key() if self.skin_spec() is not None else P.head
         self._title_target = text
-        tick()
+        self._title_swapped = False
+
+        def frame(progress):
+            if progress < 0.5:
+                ratio = progress * 2.0
+                self.lbl_title.config(fg=mix_hex(P.fg, backdrop, ratio))
+                return
+            if not self._title_swapped:
+                self._title_swapped = True
+                self.lbl_title.config(text=self._title_target or text)
+            ratio = (progress - 0.5) * 2.0
+            self.lbl_title.config(fg=mix_hex(backdrop, P.fg, ratio))
+
+        def done():
+            self._title_tween = None
+            self._title_target = None
+            self._title_swapped = False
+            self.lbl_title.config(fg=P.fg)
+
+        self._title_tween = Tween(self.root, 0.26, frame, on_done=done,
+                                  easing=ease_in_out_cubic)
+        self._title_tween.start()
 
     def set_tab(self, key):
         if key == self.tab:
@@ -1071,7 +1073,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         # 等事件处理完再按真实窗口大小同步, 免得用到过期的事件尺寸(会闪一帧大窗口)
         # 动画期间尺寸由动画自己裁, 这里不插手
         if self.skin_win is not None and not self._animating:
-            self.root.after_idle(self.sync_skin)
+            self.sync_skin_later()
         if getattr(self, "_win_size", None) == (e.width, e.height):
             return
         self._win_size = (e.width, e.height)
@@ -1295,6 +1297,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.skin_win = win
             self.skin_label = label
             self._skin_size = None
+            self._skin_geom = None
             self.skin_quiet()
             self.skin_bind_events()
         self.reload_skin_image()
@@ -1302,7 +1305,22 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.skin_win.deiconify()
         except Exception:
             pass
+        self.drop_skin_child_region()
         self.sync_skin()
+
+    def drop_skin_child_region(self):
+        """清掉皮肤子窗口上可能残留的裁剪区域
+
+        以前顶层包装窗口还没建好时把圆角区域设到过子窗口上, 那块区域不会跟着改大小,
+        窗口拖大以后下半截就被裁掉了(看着是透明的)。
+        """
+        win = self.skin_win
+        if win is None:
+            return
+        try:
+            ctypes.windll.user32.SetWindowRgn(win.winfo_id(), None, True)
+        except Exception:
+            pass
 
     def destroy_skin(self):
         """去掉皮肤窗口"""
@@ -1324,6 +1342,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_photo = None
         self._skin_size = None
         self._skin_region_size = None
+        self._skin_geom = None
         if win is not None:
             try:
                 win.destroy()
@@ -1518,6 +1537,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return
         self.refresh_skin_crop()
 
+    def sync_skin_later(self):
+        """把"等会儿再同步皮肤"合并成一次
+
+        窗口一次变化会连着来一串事件, 每个都排一个同步的话,
+        皮肤窗口会被反复挪位置/重画, 收起的时候就看着一闪一闪的。
+        """
+        if self._skin_sync_job is not None:
+            return
+        self._skin_sync_job = self.root.after_idle(self.run_skin_sync)
+
+    def run_skin_sync(self):
+        """空闲时补一次皮肤同步"""
+        self._skin_sync_job = None
+        self.sync_skin()
+
     def sync_skin(self, width=None, height=None, x=None, y=None, clip=True):
         """让皮肤窗口跟着主窗口的位置/大小, 并压在主窗口下面
 
@@ -1563,10 +1597,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 x = root.winfo_rootx()
             if y is None:
                 y = root.winfo_rooty()
+            geometry = (size[0], size[1], int(x), int(y))
             # 顺序不能反: SetWindowPos 会让 Tk 把窗口的旧位置当成"已成事实",
             # 先把窗口排到下面, 再改位置, 位置请求才不会被作废
             self.place_skin_below()
-            win.geometry("{}x{}+{}+{}".format(size[0], size[1], int(x), int(y)))
+            if geometry != self._skin_geom:
+                # 位置大小没变就别再设一遍, 重复设会让皮肤窗口重画(收起时会闪)
+                win.geometry("{}x{}+{}+{}".format(*geometry))
+                self._skin_geom = geometry
         except Exception:
             pass
 
@@ -1601,6 +1639,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         """
         try:
             user32 = ctypes.windll.user32
+            gw_hwndprev = 3
+            # 主窗口已经紧挨在皮肤上面就不用再排了, 反复 SetWindowPos 会让它重画
+            if user32.GetWindow(hwnd, gw_hwndprev) == self.main_hwnd():
+                return
             flags = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
             user32.SetWindowPos(hwnd, self.main_hwnd(), 0, 0, 0, 0, flags)
         except Exception:
@@ -1638,8 +1680,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             h = max(2, int(height))
             rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
             user32.SetWindowRgn(wrapper, rgn, True)
-            # 子窗口上要是残留了旧区域, 会把新大小裁掉, 一并清掉
-            user32.SetWindowRgn(child, None, True)
             return True
         except Exception:
             return False
@@ -1650,11 +1690,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         动画过程中传当前帧的尺寸进来, 免得 winfo_width 还是上一帧的旧值。
         """
         try:
-            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             w = max(2, int(width or self.root.winfo_width()))
             h = max(2, int(height or self.root.winfo_height()))
+            size = (w, h)
+            # 大小没变就别再设一遍区域, 每次 SetWindowRgn 都会让窗口重画
+            if self._main_region_size == size:
+                return
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            if not hwnd:
+                return
             rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
-            ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+            if ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True):
+                self._main_region_size = size
+            else:
+                ctypes.windll.gdi32.DeleteObject(rgn)
         except Exception:
             pass
 
@@ -1699,6 +1748,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r = self.root
         r.withdraw()
         r.overrideredirect(True)
+        # overrideredirect 一改, Tk 会重建顶层包装窗口, 旧的圆角区域跟着没了
+        self._main_region_size = None
         skin = self.skin_spec()
         alpha = float(self.alpha)
         try:
