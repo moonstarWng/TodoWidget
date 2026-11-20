@@ -15,7 +15,7 @@ try:
 except Exception:
     pystray = None
 
-from .paths import APP_DIR, CONF_FILE
+from .paths import CONF_FILE, DATA_DIR
 from .store import Store
 from . import theme as T
 from .anim import Tween, ease_in_out_cubic, mix_hex
@@ -210,7 +210,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return ""
         if os.path.isabs(path):
             return path if os.path.exists(path) else ""
-        full = os.path.join(APP_DIR, path.replace("/", os.sep))
+        full = os.path.join(DATA_DIR, path.replace("/", os.sep))
         return full if os.path.exists(full) else ""
 
     def apply_palette_choice(self):

@@ -18,7 +18,7 @@ try:
 except Exception:  # 没装 pystray/pillow 也能跑, 只是没有托盘
     HAS_TRAY = False
 
-from .paths import APP_DIR
+from .paths import DATA_DIR
 from .theme import P, hex_to_rgb
 
 class MonitorInfo(ctypes.Structure):
@@ -178,7 +178,7 @@ def single_instance():
 def log_error(exc, val, tb):
     """把 Tk 回调里的异常写到文件, pythonw 下没有控制台也能查"""
     import traceback
-    path = os.path.join(APP_DIR, "todo_error.log")
+    path = os.path.join(DATA_DIR, "todo_error.log")
     try:
         with open(path, "a", encoding="utf-8") as f:
             stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

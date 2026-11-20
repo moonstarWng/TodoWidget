@@ -19,7 +19,7 @@ except Exception:  # 没装 pillow 就只是不能放图片
     ImageTk = None
 
 from . import theme as T
-from .paths import APP_DIR
+from .paths import DATA_DIR
 from .store import walk as _walk
 from .theme import P
 from .utils import MonitorInfo, open_url, round_corners
@@ -484,7 +484,7 @@ class NoteMixin:
     def add_image_file(self, state, source):
         """把图片复制到 note_images 目录, 再插入引用"""
         try:
-            folder = os.path.join(APP_DIR, "note_images")
+            folder = os.path.join(DATA_DIR, "note_images")
             if not os.path.isdir(folder):
                 os.makedirs(folder, exist_ok=True)
             ext = os.path.splitext(source)[1].lower()
@@ -499,7 +499,7 @@ class NoteMixin:
     def add_image_bitmap(self, state, image):
         """把剪贴板里的位图存成文件再插入"""
         try:
-            folder = os.path.join(APP_DIR, "note_images")
+            folder = os.path.join(DATA_DIR, "note_images")
             if not os.path.isdir(folder):
                 os.makedirs(folder, exist_ok=True)
             name = uuid.uuid4().hex[:12] + ".png"
@@ -547,7 +547,7 @@ class NoteMixin:
         """图片路径: 绝对路径或相对项目目录"""
         if os.path.isabs(path) and os.path.exists(path):
             return path
-        full = os.path.join(APP_DIR, path.replace("/", os.sep))
+        full = os.path.join(DATA_DIR, path.replace("/", os.sep))
         if os.path.exists(full):
             return full
         return None

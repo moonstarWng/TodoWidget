@@ -3,6 +3,7 @@
 
 import ctypes
 import os
+import subprocess
 import queue
 import shutil
 import threading
@@ -19,8 +20,8 @@ except Exception:
     ImageGrab = None
     ImageTk = None
 
-from . import updater
-from .paths import APP_DIR
+from . import paths, updater
+from .paths import DATA_DIR
 from .theme import (P, GRADIENTS, THEMES, THEME_NAMES, auto_text_color,
                     best_text_color, mix_color, set_theme)
 from .utils import make_icon, round_corners
@@ -691,7 +692,7 @@ class SettingsMixin:
 
     def copy_theme_image(self, source):
         """把选的背景图复制到 theme_bg 目录, 返回相对路径"""
-        folder = os.path.join(APP_DIR, "theme_bg")
+        folder = os.path.join(DATA_DIR, "theme_bg")
         if not os.path.isdir(folder):
             os.makedirs(folder)
         ext = os.path.splitext(source)[1].lower() or ".png"
@@ -943,7 +944,7 @@ class SettingsMixin:
                 try:
                     path = state["image"]
                     if not os.path.isabs(path):
-                        path = os.path.join(APP_DIR, path.replace("/", os.sep))
+                        path = os.path.join(DATA_DIR, path.replace("/", os.sep))
                     image = Image.open(path).convert("RGB")
                     image.thumbnail((1600, 1600), Image.LANCZOS)
                     state["_pil"] = image
@@ -1154,7 +1155,7 @@ class SettingsMixin:
                 return ""
             if os.path.isabs(path):
                 return path if os.path.exists(path) else ""
-            full = os.path.join(APP_DIR, path.replace("/", os.sep))
+            full = os.path.join(DATA_DIR, path.replace("/", os.sep))
             return full if os.path.exists(full) else ""
 
         def pick_image():
@@ -1725,9 +1726,24 @@ class SettingsMixin:
             updater.version_text(), updater.build_text()),
                  bg=P.bg, fg=P.fg_dim, font=self.f_small).pack(anchor="w",
                                                                pady=(6, 0))
-        tk.Label(block, text="数据都在程序目录：{}".format(APP_DIR),
-                 bg=P.bg, fg=P.fg_faint, font=self.f_small,
-                 justify="left", wraplength=380).pack(anchor="w", pady=(6, 0))
+
+
+        holder = self.settings_block(
+            panel, "数据位置",
+            "任务、配色、便签图片都放在这个文件夹；换电脑或备份拷它就行")
+        tk.Label(holder, text=paths.DATA_DIR, bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, justify="left", wraplength=360,
+                 anchor="w").pack(fill="x")
+        data_row = tk.Frame(holder, bg=P.bg)
+        data_row.pack(fill="x", pady=(8, 0))
+        open_btn = tk.Label(data_row, text="打开目录", bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=12, pady=5, cursor="hand2")
+        open_btn.pack(side="left", padx=(0, 8))
+        open_btn.bind("<Button-1>", lambda ev: self.open_data_folder())
+        change_btn = tk.Label(data_row, text="更改…", bg=P.bg_alt, fg=P.fg_dim,
+                              font=self.f_small, padx=12, pady=5, cursor="hand2")
+        change_btn.pack(side="left")
+        change_btn.bind("<Button-1>", lambda ev: self.change_data_folder())
 
         holder = self.settings_block(panel, "更新",
                                      "从 GitHub 上下载最新打包好的版本")
@@ -1747,6 +1763,59 @@ class SettingsMixin:
                                        font=self.f_small, justify="left",
                                        anchor="w", wraplength=380)
         self._update_status.pack(fill="x")
+
+    def open_data_folder(self):
+        """打开数据目录"""
+        if paths.open_data_dir():
+            return
+        messagebox.showerror("打开目录", "没打开成功，路径是：\n" + paths.DATA_DIR,
+                             parent=self.settings_win)
+
+    def change_data_folder(self):
+        """改数据目录: 复制一份过去, 然后重启"""
+        target = filedialog.askdirectory(
+            parent=self.settings_win, title="选择数据存放目录",
+            mustexist=False)
+        if not target:
+            return
+        target = os.path.normpath(target)
+        if target == os.path.normpath(paths.DATA_DIR):
+            return
+        if not paths.switch_data_dir(target):
+            messagebox.showerror("数据位置", "这个目录没法写入：\n" + target,
+                                 parent=self.settings_win)
+            return
+        messagebox.showinfo(
+            "数据位置",
+            "已经复制到：\n{}\n\n马上重启，之后就从新位置读写。\n"
+            "原来的文件没删，确认没问题可以自己删掉。".format(target),
+            parent=self.settings_win)
+        self.restart_app()
+
+    def restart_app(self):
+        """重启自己(先拉起新进程, 再退掉旧的)"""
+        try:
+            self.save_conf()
+        except Exception:
+            pass
+        target = updater.exe_path()
+        if target is None:
+            messagebox.showinfo("重启", "源码运行时请手动重启。",
+                                parent=self.settings_win)
+            return
+        flags = getattr(subprocess, "DETACHED_PROCESS", 0x00000008)
+        flags |= getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        command = 'ping -n 4 127.0.0.1 >nul & start "" "{}"'.format(target)
+        try:
+            subprocess.Popen(command, shell=True, creationflags=flags,
+                             stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        except Exception as exc:
+            messagebox.showerror("重启", "重启失败：{}".format(exc),
+                                 parent=self.settings_win)
+            return
+        self.quit()
 
     def hover_update_btn(self, entering):
         """更新按钮的悬停效果 (下载中不让点)"""
