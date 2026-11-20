@@ -480,7 +480,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.list_paint_later()
 
         self.tree.configure(yscrollcommand=on_tree_scroll)
-        sb.pack(side="right", fill="y", pady=2)
+        # 不显示滚动条: 滚轮/键盘/拖动都照常, 右边不留一条竖条
         self.tree.pack(side="left", fill="both", expand=True)
         # 列表区大小定下来以后, 底下那层膜要按新区域重铺(窗口刚改大时布局会晚一拍)
         body.bind("<Configure>", self.on_body_configure, add="+")

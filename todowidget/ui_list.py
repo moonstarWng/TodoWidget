@@ -188,15 +188,9 @@ class ListViewMixin:
         self.root.after_idle(self.sync_scroll)
 
     def sync_scroll(self):
-        """内容放得下就把滚动条藏起来, 更干净"""
+        """滚动条不显示了; 留着这个方法是因为列表重建后会调一次"""
         try:
-            y0, y1 = self.tree.yview()
-            need = (y1 - y0) < 0.998
-            mapped = bool(self.scroll.winfo_ismapped())
-            if need and not mapped:
-                self.scroll.pack(side="right", fill="y", before=self.tree)
-            elif not need and mapped:
-                self.scroll.pack_forget()
+            self.scroll.pack_forget()
         except Exception:
             pass
 
