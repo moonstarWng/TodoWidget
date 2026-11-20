@@ -385,14 +385,18 @@ class SettingsMixin:
                            group="stat", value=False)
 
         holder = self.settings_block(
-            panel, "列表磨砂",
-            "图片皮肤时给列表加一层半透明膜，照片再花字也看得清")
-        self.settings_chip(holder, "加", self.scrim,
-                           lambda: self.choose_scrim(True),
-                           group="scrim", value=True)
-        self.settings_chip(holder, "不加", not self.scrim,
-                           lambda: self.choose_scrim(False),
-                           group="scrim", value=False)
+            panel, "列表底图",
+            "图片皮肤时列表区怎么处理：磨砂是半透明膜，纯色铺不透明底色，"
+            "不铺就直接看原图（字会有点毛边）")
+        self.settings_chip(holder, "磨砂", self.scrim_mode == "frost",
+                           lambda: self.choose_scrim_mode("frost"),
+                           group="scrim", value="frost")
+        self.settings_chip(holder, "纯色", self.scrim_mode == "solid",
+                           lambda: self.choose_scrim_mode("solid"),
+                           group="scrim", value="solid")
+        self.settings_chip(holder, "不铺", self.scrim_mode == "off",
+                           lambda: self.choose_scrim_mode("off"),
+                           group="scrim", value="off")
 
     THEME_CELL_WIDTH = 78
     THEME_CELL_HEIGHT = 50
@@ -576,14 +580,16 @@ class SettingsMixin:
         self.fit_width(self.root.winfo_width())
         self.restyle_group("stat", self.show_stat)
 
-    def choose_scrim(self, value):
-        """图片皮肤列表上加不加那层磨砂膜
+    def choose_scrim_mode(self, mode):
+        """图片皮肤列表区怎么画: frost 磨砂 / solid 纯色 / off 不铺
 
-        :param value: True 加, False 不加
+        :param mode: 目标模式
         """
-        self.scrim = bool(value)
+        if mode not in ("frost", "solid", "off") or mode == self.scrim_mode:
+            return
+        self.scrim_mode = mode
         self.save_conf()
-        self.restyle_group("scrim", self.scrim)
+        self.restyle_group("scrim", self.scrim_mode)
         self.refresh_skin_film()
 
     def choose_theme(self, key):

@@ -99,8 +99,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.accent = self.conf.get("accent") or None
         self.custom_themes = self.conf.get("themes") or []
         self.show_stat = bool(self.conf.get("show_stat", True))
-        # 图片皮肤时列表上那层磨砂半透明膜, 关掉就是原图直接透上来
-        self.scrim = bool(self.conf.get("scrim", True))
+        # 图片皮肤时列表底图的三档: frost 磨砂膜 / solid 纯色 / off 不铺
+        mode = self.conf.get("scrim_mode")
+        if not mode:
+            mode = "frost" if self.conf.get("scrim", True) else "off"
+        self.scrim_mode = mode if mode in ("frost", "solid", "off") else "frost"
         self.bg_image = ""
         self._theme_image = ""
         self.settings_win = None
@@ -137,7 +140,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                          theme=self.theme, accent=self.accent,
                          resize_locked=bool(self.resize_locked),
                          show_stat=bool(self.show_stat),
-                         scrim=bool(self.scrim),
+                         scrim_mode=self.scrim_mode,
                          themes=self.custom_themes)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -216,6 +219,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self._theme_image = custom.get("image") or ""
         else:
             set_theme(self.theme, self.accent)
+        if self.skin_spec() is not None:
+            # 压在底图上时灰字太淡就糊了, 次要文字离背景别拉太远
+            P.done = mix_color(P.fg, P.bg, 0.35)
+            P.fg_dim = mix_color(P.fg, P.bg, 0.22)
+            P.fg_faint = mix_color(P.fg, P.bg, 0.45)
         self.bg_image = self.bg_image_path()
 
     def build_ui(self):
@@ -252,6 +260,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.f_group_done = pick_font(r, 10, "bold", True)
         self.f_item = pick_font(r, 10)
         self.f_item_done = pick_font(r, 10, overstrike=True)
+        self.f_small = pick_font(r, 8)
         # 皮肤模式文字是压在底图上的, 加粗一点抗锯齿的边就不那么显糊
         if self.skin_spec() is not None:
             self.f_item_skin = pick_font(r, 10, "bold")
@@ -259,12 +268,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             # 列表项加粗后跟分组一样重, 分组放大一号把层次找回来
             self.f_group_skin = pick_font(r, 11, "bold")
             self.f_group_skin_done = pick_font(r, 11, "bold", True)
+            # 日期这种小字压在图上本来就糊, 放大一号
+            self.f_small_skin = pick_font(r, 9)
         else:
             self.f_item_skin = self.f_item
             self.f_item_skin_done = self.f_item_done
             self.f_group_skin = self.f_group
             self.f_group_skin_done = self.f_group_done
-        self.f_small = pick_font(r, 8)
+            self.f_small_skin = self.f_small
         self.f_note_h1 = pick_font(r, 13, "bold")
         self.f_note_h2 = pick_font(r, 11, "bold")
         self.f_note_bold = pick_font(r, 10, "bold")
@@ -442,8 +453,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             drop = dict(cfg, background="#4a3f22")
             self.tree.tag_configure("drop_" + name, **drop)
         self.tree.tag_configure("empty", font=self.f_item, foreground=P.fg_faint)
-        self.tree.tag_configure("sep", font=self.f_small, foreground=P.fg_dim)
-        self.tree.tag_configure("day", font=self.f_small, foreground=P.fg_dim)
+        self.tree.tag_configure("sep", font=self.f_small_skin, foreground=P.fg_dim)
+        self.tree.tag_configure("day", font=self.f_small_skin, foreground=P.fg_dim)
 
         self.tree.bind("<space>", lambda e: self.toggle(self.tree.focus()))
         self.tree.bind("<Double-1>", self.on_double_click)
@@ -532,6 +543,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.apply_resize_state()
         if self.skin_spec() is not None:
             self.apply_skin_key()
+        # 纯色模式要把列表区盖成不透明底, 必须放在 apply_skin_key 之后
+        self.apply_panel_mode()
         # 重建界面后按当前宽度再摆一次, 免得统计/提示停在旧状态
         self._win_size = None
         self.fit_width(self.root.winfo_width())
@@ -680,7 +693,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 fg=pending_color if self.tab == "pending" else P.fg_dim)
             self.tab_labels["done"].config(
                 fg=done_color if self.tab == "done" else P.fg_dim)
-            empty = self.skin_key() if self.skin_spec() is not None else P.bg
+            empty = self.empty_bar_bg()
             self.tab_bars["pending"].config(
                 bg=pending_color if self.tab == "pending" else empty)
             self.tab_bars["done"].config(
@@ -1541,15 +1554,89 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
 
     def skin_scrim_alpha(self, spec):
-        """列表上那层半透明膜要多浓(0 就是不铺)
+        """列表上那层磨砂膜要多浓(0 就是不铺)
 
         :param spec: 自定义配色字典
         """
         mode = spec.get("mode") or ("image" if spec.get("image") else "solid")
-        if not getattr(self, "scrim", True):
+        if self.scrim_mode != "frost":
             return 0.0
         # 渐变本身是干净的, 只有照片会把文字衬得看不清
         return 0.3 if mode == "image" else 0.0
+
+    def panel_solid(self):
+        """列表区是不是铺成不透明纯色"""
+        return self.skin_spec() is not None and self.scrim_mode == "solid"
+
+    def panel_color(self):
+        """纯色列表的底色: 在主题底色上压一点, 看着像一块面板"""
+        return mix_color(P.bg, "#000000", 0.05)
+
+    def blank_bg(self):
+        """"透明"那一档用色: 皮肤模式是色键, 否则是主题底色"""
+        if self.skin_spec() is None:
+            return P.bg
+        return self.skin_key()
+
+    def empty_bar_bg(self):
+        """页签下面那条细条"未选中"时的颜色"""
+        if self.panel_solid():
+            return self.panel_color()
+        return self.blank_bg()
+
+    def apply_panel_mode(self):
+        """按三档模式决定列表区怎么画
+
+        纯色模式给列表区铺不透明底色: 文字底下有真正的背景, ClearType 才不会
+        在字周围留一圈色键色的毛边(看着像锯齿/有点底色)。
+        """
+        color = self.panel_color() if self.panel_solid() else self.blank_bg()
+        try:
+            style = ttk.Style(self.root)
+            style.configure("Todo.Treeview", background=color,
+                            fieldbackground=color)
+            style.configure("Todo.Vertical.TScrollbar", troughcolor=color,
+                            bordercolor=color)
+        except Exception:
+            pass
+        # 只改"当前是透明/面板色"的控件, 强调色的下划线之类不要动
+        replaceable = set()
+        for value in (P.bg, P.head, P.group_bg, self.panel_color()):
+            replaceable.add(str(value).lower())
+        try:
+            replaceable.add(str(self.skin_key()).lower())
+        except Exception:
+            pass
+
+        def repaint(widget):
+            for child in widget.winfo_children():
+                try:
+                    background = str(child.cget("bg")).lower()
+                except Exception:
+                    background = None
+                if background in replaceable:
+                    try:
+                        child.configure(bg=color)
+                    except Exception:
+                        pass
+                repaint(child)
+
+        for widget in (getattr(self, "_tabbar", None), getattr(self, "_body", None)):
+            if widget is None:
+                continue
+            try:
+                widget.configure(bg=color)
+            except Exception:
+                pass
+            repaint(widget)
+        # 卡片本身也铺上: 列表四周的留白/页签和列表之间的缝就不会漏出照片
+        card = getattr(self, "card", None)
+        if card is not None:
+            try:
+                card.configure(bg=color)
+            except Exception:
+                pass
+        self.paint_head_bg()
 
     def skin_scrim_rect(self):
         """列表(页签 + 列表区)在窗口里的矩形, 拿不到就返回 None"""
@@ -1654,12 +1741,17 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         return self.skin_scrim_rect() is not None
 
     def refresh_skin_film(self):
-        """列表加不加膜的配置改了: 立刻重铺一次底图"""
+        """列表底图模式(磨砂 / 纯色 / 不铺)改了: 立刻重铺一遍"""
         self._scrim_drawn = False
         self._skin_size = None
+        if self.skin_spec() is not None:
+            # 先把界面底色打回"透明"的基准, 再按新模式盖
+            self.apply_skin_key()
+        self.apply_panel_mode()
         if self.skin_win is not None:
             self.reload_skin_image(force=True)
             self.sync_skin()
+        self.refresh()
 
     def refresh_skin_crop(self):
         """窗口大小定下来以后重裁一次皮肤底图"""
