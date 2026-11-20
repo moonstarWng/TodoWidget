@@ -163,7 +163,6 @@ def run_selftest():
     check("全部展开生效", expanded == total)
 
     # 收起成窄横条: 宽度按顶栏内容算, 统计文字不再显示
-    app.mode = "desktop"
     before_w = root.winfo_width()
     app.set_folded(True)
     settle_anim()

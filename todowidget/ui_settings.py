@@ -1181,16 +1181,7 @@ class SettingsMixin:
     # ---------------- 窗口 ----------------
 
     def build_window_panel(self, panel):
-        """显示方式 / 总在最前 / 窗口大小"""
-        holder = self.settings_block(panel, "显示方式",
-                                     "贴桌面：不占任务栏，藏在别的窗口下面")
-        self.settings_chip(holder, "贴桌面", self.mode == "desktop",
-                           lambda: self.choose_mode("desktop"),
-                           group="mode", value="desktop")
-        self.settings_chip(holder, "普通窗口", self.mode == "window",
-                           lambda: self.choose_mode("window"),
-                           group="mode", value="window")
-
+        """总在最前 / 窗口大小"""
         holder = self.settings_block(panel, "总在最前", "盖在别的窗口上面")
         self.settings_chip(holder, "开", self.topmost,
                            lambda: self.choose_topmost(True),
@@ -1207,15 +1198,6 @@ class SettingsMixin:
         self.settings_chip(holder, "锁定", bool(self.resize_locked),
                            lambda: self.choose_resize_lock(True),
                            group="size", value=True)
-
-    def choose_mode(self, mode):
-        """切换贴桌面 / 普通窗口; 窗口要重摆, 设置窗口跟着重开一次"""
-        if mode == self.mode:
-            return
-        state = self.settings_state()
-        self.close_settings()
-        self.set_mode(mode)
-        self.open_settings(**state)
 
     def choose_topmost(self, value):
         """切换总在最前"""

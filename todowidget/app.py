@@ -40,7 +40,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.root = root
         self.store = store or Store()
         self.conf = self.load_conf()
-        self.mode = self.conf.get("mode", "desktop")
         self.topmost = bool(self.conf.get("topmost", True))
         self.alpha = float(self.conf.get("alpha", 1.0))
         self._refs = {}
@@ -114,7 +113,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return {}
 
     def save_conf(self):
-        self.conf.update(mode=self.mode, topmost=self.topmost, alpha=self.alpha,
+        self.conf.update(topmost=self.topmost, alpha=self.alpha,
                          collapsed=bool(self.collapsed), tab=self.tab,
                          sort_mode=self.sort_mode,
                          theme=self.theme, accent=self.accent,
@@ -205,10 +204,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_crop_job = None
         self._head_rect = None
         r = self.root
-        is_desktop = self.mode == "desktop"
         r.title("待办清单")
         r.configure(bg=P.border)
-        r.overrideredirect(is_desktop)
+        r.overrideredirect(True)
         r.minsize(270, 220)
 
         self.f_title = pick_font(r, 11, "bold")
@@ -680,7 +678,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 on_done()
             return
         self.collapsed = bool(folded)
-        if animate and self.mode == "desktop":
+        if animate:
             self.fade_title()
         else:
             self.update_title()
@@ -708,8 +706,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             # 下面的内容钉住不动, 跟着窗口边缘被裁掉
             if animate:
                 self.freeze_content()
-            use_anim = animate and self.mode == "desktop"
-            animator = self.animate_collapse if use_anim else None
+            animator = self.animate_collapse if animate else None
         else:
             self.restore_layout()
             self.btn_fold.config(text="\u25b4")
@@ -721,8 +718,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.sync_skin(target_w, target_h, clip=False)
             self.clip_skin(start_w, start_h)
             self.fit_width(target_w)
-            use_anim = animate and self.mode == "desktop"
-            animator = self.animate_reveal if use_anim else None
+            animator = self.animate_reveal if animate else None
 
         def finish():
             if self.collapsed:
@@ -986,7 +982,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.set_resize_locked(not self.resize_locked)
 
     def set_resize_locked(self, locked):
-        """锁住后右下角斜纹收起, 普通窗口模式也不能拖系统边框"""
+        """锁住后右下角斜纹收起, 窗口就不能拖大小了"""
         locked = bool(locked)
         if locked == self.resize_locked:
             return
@@ -995,19 +991,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.apply_resize_state()
 
     def apply_resize_state(self):
-        """按锁定 / 折叠 / 窗口模式 决定要不要显示右下角调节柄"""
+        """按锁定 / 折叠 决定要不要显示右下角调节柄"""
         locked = bool(getattr(self, "resize_locked", False))
-        # 无边框窗口本来就没系统边框可拖, 不去动 resizable:
-        # 在 Windows 上改这个会重刷一遍窗口, 主界面闪一下还会丢圆角
-        if self.mode == "window":
-            try:
-                self.root.resizable(not locked, not locked)
-            except Exception:
-                pass
         grip = getattr(self, "grip", None)
         if grip is None:
             return
-        show = (self.mode == "desktop" and not locked and not self.collapsed)
+        show = (not locked and not self.collapsed)
         shown = bool(grip.winfo_manager())
         if show and not shown:
             anchor = getattr(self, "_gear", grip)
@@ -1484,8 +1473,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
         动画过程中传当前帧的尺寸进来, 免得 winfo_width 还是上一帧的旧值。
         """
-        if self.mode != "desktop":
-            return
         try:
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             w = max(2, int(width or self.root.winfo_width()))
@@ -1535,7 +1522,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def apply_window(self):
         r = self.root
         r.withdraw()
-        r.overrideredirect(self.mode == "desktop")
+        r.overrideredirect(True)
         skin = self.skin_spec()
         alpha = float(self.alpha)
         try:
@@ -1561,19 +1548,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.make_skin()
         else:
             self.destroy_skin()
-        if self.mode == "desktop" and not self.topmost:
+        if not self.topmost:
             r.after(150, self.sink)
         r.after(60, self.round_window)
         r.after(80, self.sync_skin)
         self.save_conf()
-
-    def set_mode(self, mode):
-        if mode == self.mode:
-            return
-        self.save_geom()
-        self.mode = mode
-        self.save_conf()
-        self.apply_window()
 
     def toggle_topmost(self):
         self.topmost = not self.topmost
@@ -1585,7 +1564,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pass
         self.save_conf()
         self.place_skin_below()
-        if not self.topmost and self.mode == "desktop":
+        if not self.topmost:
             self.root.after(100, self.sink)
 
     def sink(self):
@@ -1630,12 +1609,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 still_in_app = False
             if not still_in_app:
                 self.finish_edit()
-        if self.mode != "desktop":
-            return
         self.root.after(250, self.maybe_sink)
 
     def maybe_sink(self):
-        if self.mode != "desktop" or self.topmost or self._dragging:
+        if self.topmost or self._dragging:
             return
         if getattr(self, "_resizing", False):
             return
@@ -1648,9 +1625,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def hide(self):
         self.close_settings()
         self.save_geom()
-        if self._tray is None:  # 没有托盘就别真藏起来, 最小化到任务栏
-            self.set_mode("window")
-            self.root.iconify()
+        if self._tray is None:
+            # 没有托盘图标就没法再显示出来, 干脆不隐藏
             return
         self.root.withdraw()
         self.sync_skin()
@@ -1681,12 +1657,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             pystray.MenuItem("显示 / 隐藏", lambda: self.call(self.toggle_window), default=True),
             pystray.MenuItem("设置…", lambda: self.call(self.open_settings)),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("贴到桌面（占桌面, 不占任务栏）",
-                             lambda: self.call(self.set_mode, "desktop"),
-                             checked=lambda i: self.mode == "desktop", radio=True),
-            pystray.MenuItem("普通窗口（占任务栏）",
-                             lambda: self.call(self.set_mode, "window"),
-                             checked=lambda i: self.mode == "window", radio=True),
             pystray.MenuItem("总在最前", lambda: self.call(self.toggle_topmost),
                              checked=lambda i: self.topmost),
             pystray.MenuItem("锁定窗口大小",
