@@ -66,6 +66,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_label = None
         self.skin_photo = None
         self._skin_image = None
+        self._skin_plain = None
         self._skin_size = None
         self._skin_region_size = None
         self._skin_crop_job = None
@@ -106,18 +107,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if not mode:
             mode = "frost" if self.conf.get("scrim", True) else "off"
         self.scrim_mode = mode if mode in ("frost", "solid", "off") else "frost"
-        # 外观细节: 外边框 + 顶栏/底栏是否单独上色
-        border = self.conf.get("border") or {}
-        border_mode = border.get("mode")
-        self.border_mode = border_mode if border_mode in ("none", "solid",
-                                                          "gradient") else "none"
-        self.border_width = max(0, min(8, int(border.get("width") or 2)))
-        self.border_color = border.get("color") or "#3b7cf6"
-        self.border_color2 = border.get("color2") or "#8a5cf6"
-        self.header_split = bool(self.conf.get("header_split"))
-        self.header_color = self.conf.get("header_color") or "#17181d"
-        self.footer_split = bool(self.conf.get("footer_split"))
-        self.footer_color = self.conf.get("footer_color") or "#17181d"
+        # 外观细节(边框 / 顶底栏)存在配色里, 这里先给默认值
+        self.border_mode = "none"
+        self.border_width = 2
+        self.border_color = "#3b7cf6"
+        self.border_color2 = "#8a5cf6"
+        self.header_split = False
+        self.header_color = "#17181d"
+        self.footer_split = False
+        self.footer_color = "#17181d"
         self.bg_image = ""
         self._theme_image = ""
         self.settings_win = None
@@ -155,14 +153,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                          resize_locked=bool(self.resize_locked),
                          show_stat=bool(self.show_stat),
                          scrim_mode=self.scrim_mode,
-                         border=dict(mode=self.border_mode,
-                                     width=self.border_width,
-                                     color=self.border_color,
-                                     color2=self.border_color2),
-                         header_split=bool(self.header_split),
-                         header_color=self.header_color,
-                         footer_split=bool(self.footer_split),
-                         footer_color=self.footer_color,
                          themes=self.custom_themes)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -246,6 +236,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             P.done = mix_color(P.fg, P.bg, 0.35)
             P.fg_dim = mix_color(P.fg, P.bg, 0.22)
             P.fg_faint = mix_color(P.fg, P.bg, 0.45)
+        extras = self.theme_extras()
+        self.border_mode = extras["border_mode"]
+        self.border_width = extras["border_width"]
+        self.border_color = extras["border_color"]
+        self.border_color2 = extras["border_color2"]
+        self.header_split = extras["header_split"]
+        self.header_color = extras["header_color"]
+        self.footer_split = extras["footer_split"]
+        self.footer_color = extras["footer_color"]
         self.bg_image = self.bg_image_path()
 
     def build_ui(self):
@@ -932,6 +931,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.paint_head_bg(max(1, width - 2 * self._frame_pad))
             self.round_window(width, height)
             self.clip_skin(width, height)
+            self.paint_skin_frame(width, height)
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -965,6 +965,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             height = int(round(start_h + (target_h - start_h) * eased))
             self.round_window(max(1, width), max(1, height))
             self.clip_skin(max(1, width), max(1, height))
+            self.paint_skin_frame(max(1, width), max(1, height))
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -1003,6 +1004,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.root.minsize(140, 42 + 2 * self._frame_pad)
         self.apply_resize_state()
         self.round_window(width, height)
+        if width and height:
+            self.paint_skin_frame(width, height)
         self.sync_skin(width, height)
 
     def finish_expand(self, width=None, height=None):
@@ -1159,6 +1162,32 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.root.after(15, self.round_window)
 
     # ---------------- 图片皮肤 ----------------
+
+    def theme_extras(self):
+        """当前配色自带的外观细节: 边框 + 顶栏/底栏
+
+        内置配色没有这些, 就是"不画边框、顶栏底栏跟列表一体";
+        自定义配色把它们存在自己身上。
+        """
+        defaults = {"border_mode": "none", "border_width": 2,
+                    "border_color": "#3b7cf6", "border_color2": "#8a5cf6",
+                    "header_split": False, "header_color": "#17181d",
+                    "footer_split": False, "footer_color": "#17181d"}
+        custom = self.custom_theme()
+        if custom is None:
+            return defaults
+        border = custom.get("border") or {}
+        mode = border.get("mode")
+        return {
+            "border_mode": mode if mode in ("none", "solid", "gradient") else "none",
+            "border_width": max(0, min(8, int(border.get("width") or 2))),
+            "border_color": border.get("color") or "#3b7cf6",
+            "border_color2": border.get("color2") or "#8a5cf6",
+            "header_split": bool(custom.get("header_split")),
+            "header_color": custom.get("header_color") or "#17181d",
+            "footer_split": bool(custom.get("footer_split")),
+            "footer_color": custom.get("footer_color") or "#17181d",
+        }
 
     def skin_spec(self):
         """当前是不是图片/渐变皮肤; 是的话返回一份皮肤说明"""
@@ -1419,6 +1448,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_label = None
         self.skin_photo = None
         self._skin_image = None
+        self._skin_plain = None
         self._skin_size = None
         self._skin_region_size = None
         self._skin_geom = None
@@ -1588,7 +1618,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 base = Image.new("RGB", image.size, hex_to_rgb(P.bg))
                 image = Image.blend(image, base, strength)
             image = self.apply_skin_scrim(image, spec)
-            image = self.apply_border(image)
+            self._skin_plain = image.copy()
+            rect = None
+            if self.collapsed and self._folded_size:
+                folded_w, folded_h = self._folded_size
+                rect = (0, 0, folded_w, folded_h)
+            image = self.apply_border(image, rect)
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
@@ -1706,16 +1741,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         from PIL import Image
         return Image.new("RGB", (width, height), hex_to_rgb(self.border_color))
 
-    def apply_border(self, image):
+    def apply_border(self, image, rect=None):
         """在底图外围画一圈边框(圆角跟窗口一致)
 
         :param image: 已经处理好的底图(RGB)
+        :param rect: 边框围着哪一块, 不传就是整张图(收起时传横条那块)
         """
         if not self.border_active():
             return image
         try:
             from PIL import Image, ImageChops, ImageDraw
-            width, height = image.size
+            left, top, right, bottom = rect or (0, 0) + image.size
+            right = min(right, image.width)
+            bottom = min(bottom, image.height)
+            width = max(2, right - left)
+            height = max(2, bottom - top)
             thickness = max(1, min(8, int(self.border_width)))
             radius = 10
             scale = 2
@@ -1732,10 +1772,29 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             outer = mask(0, radius)
             inner = mask(thickness, max(1, radius - thickness))
             ring = ImageChops.subtract(outer, inner)
-            image.paste(self.border_fill(width, height), (0, 0), ring)
+            image.paste(self.border_fill(width, height), (left, top), ring)
         except Exception:
             pass
         return image
+
+    def paint_skin_frame(self, width, height):
+        """按某一帧的可见大小重画底图(带边框), 收起/展开动画用
+
+        :param width: 可见宽
+        :param height: 可见高
+        """
+        base = self._skin_plain
+        if base is None or not self.border_active():
+            return
+        try:
+            image = base.copy()
+            image = self.apply_border(
+                image, (0, 0, max(2, int(width)), max(2, int(height))))
+            photo = ImageTk.PhotoImage(image)
+            self.skin_label.configure(image=photo)
+            self.skin_photo = photo
+        except Exception:
+            pass
 
     def header_bg(self):
         """顶栏底色: 单独上色用它, 皮肤模式透明, 纯色主题用主题顶栏色"""
