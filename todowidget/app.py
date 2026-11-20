@@ -80,6 +80,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_geom = None
         # 主窗口当前的圆角区域大小, 免得重复设
         self._main_region_size = None
+        # 列表那层半透明膜的缓存: (宽, 高, 浓度) -> 圆角遮罩
+        self._scrim_cache = {}
+        # 这一版底图上到底铺上膜没有(刚启动时布局还没算好, 铺不上要补一次)
+        self._scrim_drawn = False
+        self._scrim_body_size = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
@@ -219,6 +224,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_sync_job = None
         self._skin_geom = None
         self._main_region_size = None
+        # 换主题后膜的浓度和底色都变了, 缓存作废
+        self._scrim_cache = {}
+        self._scrim_drawn = False
         self.apply_palette_choice()
         self.stop_title_fade()
         self._frozen = []
@@ -399,6 +407,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.tree.configure(yscrollcommand=sb.set)
         sb.pack(side="right", fill="y", pady=2)
         self.tree.pack(side="left", fill="both", expand=True)
+        # 列表区大小定下来以后, 底下那层膜要按新区域重铺(窗口刚改大时布局会晚一拍)
+        body.bind("<Configure>", self.on_body_configure, add="+")
 
         # Treeview 的 tag 优先级跟定义顺序有关, 混着用会串色,
         # 所以每行的状态只用一个 tag, 悬停/拖放都是独立的一套
@@ -1476,11 +1486,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
 
-    def reload_skin_image(self, width=None, height=None):
+    def reload_skin_image(self, width=None, height=None, force=False):
         """按窗口大小把皮肤底图弄好
 
         :param width: 指定宽度, 不传就用当前窗口的
         :param height: 指定高度
+        :param force: 大小没变也重做一遍(比如只是列表区的膜要重铺)
         """
         win = self.skin_win
         spec = self.skin_spec()
@@ -1493,7 +1504,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width, height = self._expanded_size
             width = max(40, width)
             height = max(40, height)
-        if self._skin_size == (width, height) and self.skin_photo is not None:
+        if not force and self._skin_size == (width, height) and self.skin_photo is not None:
             return
         try:
             image = self.skin_base_image(spec, width, height)
@@ -1506,6 +1517,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 from PIL import Image
                 base = Image.new("RGB", image.size, hex_to_rgb(P.bg))
                 image = Image.blend(image, base, strength)
+            image = self.apply_skin_scrim(image, spec)
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
@@ -1513,15 +1525,126 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
 
+    def skin_scrim_alpha(self, spec):
+        """列表上那层半透明膜要多浓(0 就是不铺)
+
+        :param spec: 自定义配色字典
+        """
+        mode = spec.get("mode") or ("image" if spec.get("image") else "solid")
+        # 渐变本身是干净的, 只有照片会把文字衬得看不清
+        return 0.3 if mode == "image" else 0.0
+
+    def skin_scrim_rect(self):
+        """列表(页签 + 列表区)在窗口里的矩形, 拿不到就返回 None"""
+        if self.collapsed:
+            return None
+        tabbar = getattr(self, "_tabbar", None)
+        body = getattr(self, "_body", None)
+        if tabbar is None or body is None:
+            return None
+        try:
+            if not body.winfo_ismapped() or not tabbar.winfo_ismapped():
+                return None
+            root_x = self.root.winfo_rootx()
+            root_y = self.root.winfo_rooty()
+            left = body.winfo_rootx() - root_x
+            right = left + body.winfo_width()
+            top = tabbar.winfo_rooty() - root_y
+            bottom = body.winfo_rooty() - root_y + body.winfo_height()
+        except Exception:
+            return None
+        if right - left < 20 or bottom - top < 20:
+            return None
+        return (max(0, left), max(0, top), right, bottom)
+
+    def skin_scrim_overlay(self, width, height, alpha):
+        """列表上那层膜的圆角遮罩, 按大小缓存
+
+        :param width: 膜的宽
+        :param height: 膜的高
+        :param alpha: 不透明度 0~1(只影响缓存键)
+        """
+        key = (width, height, round(alpha, 3))
+        mask = self._scrim_cache.get(key)
+        if mask is not None:
+            return mask
+        from PIL import Image, ImageDraw
+        scale = 2
+        big = Image.new("L", (width * scale, height * scale), 0)
+        draw = ImageDraw.Draw(big)
+        draw.rounded_rectangle(
+            [0, 0, width * scale - 1, height * scale - 1],
+            radius=10 * scale, fill=255)
+        mask = big.resize((width, height), Image.LANCZOS)
+        # 只留最近几份, 别把拖动改大小时的每一帧都攒着
+        if len(self._scrim_cache) > 6:
+            self._scrim_cache.clear()
+        self._scrim_cache[key] = mask
+        return mask
+
+    def skin_frost(self, region):
+        """把一块底图磨砂: 缩到 1/6 再模糊再放大, 比原图直接高斯快得多
+
+        :param region: 要磨砂的图片区域(RGB)
+        """
+        from PIL import Image, ImageFilter
+        width, height = region.size
+        small_w = max(2, int(width / 6))
+        small_h = max(2, int(height / 6))
+        small = region.resize((small_w, small_h), Image.BILINEAR)
+        small = small.filter(ImageFilter.GaussianBlur(2.0))
+        return small.resize(region.size, Image.BILINEAR)
+
+    def apply_skin_scrim(self, image, spec):
+        """给列表区铺一层半透明膜, 底图再花文字也看得清
+
+        先磨砂(把照片的花纹糊掉), 再往底色里混一点, 最后按圆角遮罩贴回去。
+
+        :param image: 已经裁好的底图(RGB)
+        :param spec: 自定义配色字典
+        """
+        self._scrim_drawn = False
+        alpha = self.skin_scrim_alpha(spec)
+        if alpha <= 0:
+            return image
+        rect = self.skin_scrim_rect()
+        if rect is None:
+            return image
+        left, top, right, bottom = rect
+        width = min(int(image.width), right) - left
+        height = min(int(image.height), bottom) - top
+        if width < 8 or height < 8:
+            return image
+        try:
+            region = image.crop((left, top, left + width, top + height))
+            frosted = self.skin_frost(region)
+            base = Image.new("RGB", frosted.size, hex_to_rgb(P.bg))
+            frosted = Image.blend(frosted, base, alpha)
+            mask = self.skin_scrim_overlay(width, height, alpha)
+            image.paste(frosted, (left, top), mask)
+            self._scrim_drawn = True
+        except Exception:
+            pass
+        return image
+
+    def scrim_missing(self):
+        """该铺膜却没铺上(启动时布局还没算好), 需要重裁一次底图"""
+        spec = self.skin_spec()
+        if spec is None or self.skin_scrim_alpha(spec) <= 0:
+            return False
+        if self._scrim_drawn:
+            return False
+        return self.skin_scrim_rect() is not None
+
     def refresh_skin_crop(self):
         """窗口大小定下来以后重裁一次皮肤底图"""
         if self.skin_win is None or self._animating or self.collapsed:
             return
         width = max(40, self.root.winfo_width())
         height = max(40, self.root.winfo_height())
-        if self._skin_size == (width, height):
+        if self._skin_size == (width, height) and not self.scrim_missing():
             return
-        self.reload_skin_image()
+        self.reload_skin_image(force=True)
         self.sync_skin()
 
     def schedule_skin_crop(self):
@@ -1536,6 +1659,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if self.skin_win is None:
             return
         self.refresh_skin_crop()
+
+    def on_body_configure(self, e):
+        """列表区尺寸变了: 底下那层膜是按列表区铺的, 得跟着重铺
+
+        :param e: 列表区(列表 + 滚动条)的 Configure 事件
+        """
+        size = (e.width, e.height)
+        if getattr(self, "_scrim_body_size", None) == size:
+            return
+        self._scrim_body_size = size
+        if self.skin_win is None or self._animating:
+            return
+        self._scrim_drawn = False
+        self.sync_skin_later()
 
     def sync_skin_later(self):
         """把"等会儿再同步皮肤"合并成一次
@@ -1587,9 +1724,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 # 收起状态固定是横条大小, 别被过期的事件尺寸带偏
                 width, height = self._folded_size
             size = (max(2, width), max(2, height))
-            if not self.collapsed and size != self._skin_size:
+            if not self.collapsed and (size != self._skin_size or self.scrim_missing()):
                 # 先把底图裁成新尺寸, 再把窗口撑大, 中间不会露出空白
-                self.reload_skin_image(size[0], size[1])
+                self.reload_skin_image(size[0], size[1], force=True)
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
             if clip and self._skin_region_size != size:
                 self.clip_skin(width, height)
