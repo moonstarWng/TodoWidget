@@ -112,6 +112,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.border_width = 2
         self.border_color = "#3b7cf6"
         self.border_color2 = "#8a5cf6"
+        self.radius = 0
         self.header_split = False
         self.header_color = "#17181d"
         self.footer_split = False
@@ -241,6 +242,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.border_width = extras["border_width"]
         self.border_color = extras["border_color"]
         self.border_color2 = extras["border_color2"]
+        self.radius = extras["radius"]
         self.header_split = extras["header_split"]
         self.header_color = extras["header_color"]
         self.footer_split = extras["footer_split"]
@@ -1169,7 +1171,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         内置配色没有这些, 就是"不画边框、顶栏底栏跟列表一体";
         自定义配色把它们存在自己身上。
         """
-        defaults = {"scrim_mode": "frost",
+        defaults = {"scrim_mode": "frost", "radius": 0,
                     "border_mode": "none", "border_width": 2,
                     "border_color": "#3b7cf6", "border_color2": "#8a5cf6",
                     "header_split": False, "header_color": "#17181d",
@@ -1186,6 +1188,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             "border_width": max(0, min(8, int(border.get("width") or 2))),
             "border_color": border.get("color") or "#3b7cf6",
             "border_color2": border.get("color2") or "#8a5cf6",
+            "radius": max(0, min(14, int(custom.get("radius") or 0))),
             "header_split": bool(custom.get("header_split")),
             "header_color": custom.get("header_color") or "#17181d",
             "footer_split": bool(custom.get("footer_split")),
@@ -1691,13 +1694,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def corner_radius(self):
         """窗口圆角半径
 
-        圆角半径比边框粗太多的话, 窗口区域会把边框在拐角处裁掉一大块
-        (看着就是边框断在圆角前)。有边框时按粗细收一点。
+        配色里没指定就自动: 有边框时等于边框粗细 —— 卡片是方的, 圆角一旦比
+        边框粗, 卡片直角就会盖住边框内沿, 拐角处的带子会变细。
         """
+        custom = int(getattr(self, "radius", 0) or 0)
+        if custom > 0:
+            return max(2, min(14, custom))
         if not self.border_active():
             return 10
-        thickness = max(1, min(8, int(self.border_width)))
-        return max(4, min(10, int(round(thickness * 2.0))))
+        return max(2, min(10, int(self.border_width)))
 
     def border_active(self):
         """是不是要画边框"""
@@ -1767,18 +1772,34 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if not self.border_active():
             return image
         try:
-            from PIL import Image, ImageDraw
+            from PIL import Image, ImageChops, ImageDraw
             left, top, right, bottom = rect or (0, 0) + image.size
             right = min(right, image.width)
             bottom = min(bottom, image.height)
             width = max(2, right - left)
             height = max(2, bottom - top)
             thickness = max(1, min(8, int(self.border_width)))
-            # 外圈不用自己画圆角: 窗口区域就是圆的, 超出部分会被裁掉;
-            # 内圈是方形, 正好被卡片盖住 —— 这样圆角处不会出现半截边框
-            ring = Image.new("L", (width, height), 0)
-            ImageDraw.Draw(ring).rectangle(
-                [0, 0, width - 1, height - 1], outline=255, width=thickness)
+            radius = max(2, int(round(self.corner_radius() * (scale or 1))))
+            inner_radius = max(1, radius - thickness)
+            # 超采样几倍再缩回来, 弧线才有抗锯齿
+            over = 3
+
+            def mask(inset, rad):
+                """圆角遮罩: inset 往里缩多少, rad 圆角半径
+
+                :param inset: 往里缩的像素
+                :param rad: 圆角半径
+                """
+                big = Image.new("L", (width * over, height * over), 0)
+                draw = ImageDraw.Draw(big)
+                x0 = inset * over
+                draw.rounded_rectangle(
+                    [x0, x0, width * over - 1 - x0, height * over - 1 - x0],
+                    radius=max(0, rad) * over, fill=255)
+                return big.resize((width, height), Image.LANCZOS)
+
+            # 外沿跟窗口区域同一个圆角, 内沿收一个粗细 —— 整圈等宽
+            ring = ImageChops.subtract(mask(0, radius), mask(thickness, inner_radius))
             image.paste(self.border_fill(width, height), (left, top), ring)
         except Exception:
             pass

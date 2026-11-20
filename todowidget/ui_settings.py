@@ -725,6 +725,7 @@ class SettingsMixin:
             "grad_angle": existing.get("grad_angle") or "vertical",
             "fg": existing.get("fg") or "",
             "scrim_mode": existing.get("scrim") or "frost",
+            "radius": int(existing.get("radius") or 0),
             "border_mode": (existing.get("border") or {}).get("mode") or "none",
             "border_width": int((existing.get("border") or {}).get("width") or 2),
             "border_color": (existing.get("border") or {}).get("color") or "#3b7cf6",
@@ -1053,6 +1054,23 @@ class SettingsMixin:
         border_swatch2.bind("<Button-1>", lambda ev: pick_border(2))
         dropper(color_row, lambda c: apply_border_color(c))
 
+        radius_row = tk.Frame(right, bg=P.bg)
+        radius_row.pack(fill="x", pady=(6, 0))
+        tk.Label(radius_row, text="圆角", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, width=6, anchor="w").pack(side="left")
+        radius_scale = tk.Scale(radius_row, from_=0, to=14, resolution=1,
+                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
+                                troughcolor=P.bg_alt, highlightthickness=1,
+                                highlightbackground=P.border, bd=0,
+                                sliderrelief="flat", showvalue=False,
+                                length=150,
+                                command=lambda v: set_radius(v))
+        radius_scale.pack(side="left")
+        radius_value = tk.Label(radius_row, text="自动", bg=P.bg,
+                                fg=P.fg_faint, font=self.f_small, width=4,
+                                anchor="w")
+        radius_value.pack(side="left", padx=6)
+
         tk.Label(right, text="顶栏 / 底栏", bg=P.bg, fg=P.fg,
                  font=self.f_group).pack(anchor="w", pady=(14, 0))
         tk.Label(right, text="勾上「单独上色」就不再透出底图",
@@ -1079,10 +1097,10 @@ class SettingsMixin:
 
         note = tk.Label(
             right,
-            text="渐变 / 图片模式：底图铺满整个窗口，文字保持不透明。"
-                 "「透明度」是把底图往底色里混，0% 就是原图满色。"
-                 "文字色不选就按底色自动配，「自动」可以恢复。"
-                 "图片模式可以在预览里拖动挪位置、滚轮缩放。",
+            text="渐变 / 图片模式：底图铺满整窗，文字不透明。"
+                 "「透明度」是把底图往底色里混，0% 即原图满色。"
+                 "文字色不选就按底色自动配。"
+                 "图片模式下可在预览里拖动挪位置、滚轮缩放。",
             bg=P.bg, fg=P.fg_faint, font=self.f_small, justify="left",
             wraplength=300, anchor="w")
         note.pack(fill="x", pady=(12, 0))
@@ -1213,6 +1231,16 @@ class SettingsMixin:
                                else P.fg_dim)
             refresh_preview()
 
+        def set_radius(value):
+            """圆角大小; 0 = 自动(有边框时跟随粗细)"""
+            try:
+                radius = max(0, min(14, int(float(value))))
+            except Exception:
+                return
+            state["radius"] = radius
+            radius_value.config(text="自动" if radius == 0 else "{}px".format(radius))
+            refresh_preview()
+
         def set_border_width(value):
             """拖边框粗细"""
             try:
@@ -1271,14 +1299,14 @@ class SettingsMixin:
             if key == "image":
                 image_frame.pack(fill="x")
                 alpha_row.pack(fill="x")
-                resize_window(640)
+                resize_window(665)
                 render_preview()
             elif key == "gradient":
                 gradient_frame.pack(fill="x")
-                resize_window(500)
+                resize_window(520)
             else:
                 solid_frame.pack(fill="x")
-                resize_window(450)
+                resize_window(470)
             if key != "image":
                 alpha_row.pack_forget()
 
@@ -1386,21 +1414,31 @@ class SettingsMixin:
                           fill=state["accent"])
                 draw.text((int(w * 0.38), head_h + 3), "已完成",
                           font=tiny_font, fill=mix_color(fg, state["bg"], 0.4))
-            # 边框: 直接借用真实那套画法, 圆角跟窗口一致
+            # 边框: 直接借用真实那套画法, 按缩放比例把粗细/圆角也一起缩
             if state["border_mode"] != "none":
+                try:
+                    ratio = float(w) / float(max(1, self.root.winfo_width()))
+                except Exception:
+                    ratio = 1.0
+                ratio = max(0.3, min(1.0, ratio))
+                thick = max(1, int(round(state["border_width"] * ratio)))
+                custom_radius = int(state.get("radius") or 0)
                 keep = (self.border_mode, self.border_width,
-                        self.border_color, self.border_color2)
+                        self.border_color, self.border_color2, self.radius)
                 self.border_mode = state["border_mode"]
-                self.border_width = max(1, min(6, int(state["border_width"])))
+                self.border_width = thick
                 self.border_color = state["border_color"]
                 self.border_color2 = state["border_color2"]
+                self.radius = int(round((custom_radius or
+                                         state["border_width"]) * ratio))
                 try:
-                    mock = self.apply_border(mock, None, scale=2)
+                    mock = self.apply_border(mock, None, scale=ratio)
                 except Exception:
                     pass
                 finally:
                     (self.border_mode, self.border_width,
-                     self.border_color, self.border_color2) = keep
+                     self.border_color, self.border_color2,
+                     self.radius) = keep
             return mock
 
         def render_preview():
@@ -1510,12 +1548,13 @@ class SettingsMixin:
         set_scrim(state["scrim_mode"])
         set_border_mode(state["border_mode"])
         border_scale.set(int(state["border_width"]))
+        radius_scale.set(int(state.get("radius") or 0))
         paint_split("header")
         paint_split("footer")
         set_mode(state["mode"])
         render_preview()
 
-        sizes = {"solid": 450, "gradient": 500, "image": 640}
+        sizes = {"solid": 470, "gradient": 520, "image": 665}
         width, height = 660, sizes.get(state["mode"], 430)
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
@@ -1575,6 +1614,7 @@ class SettingsMixin:
                              round(float(state.get("offset", [0.0, 0.0])[1]), 3)],
                      alpha=round(float(state.get("alpha") or 0.0), 3),
                      scrim=state.get("scrim_mode") or "frost",
+                     radius=int(state.get("radius") or 0),
                      border=dict(mode=state.get("border_mode") or "none",
                                  width=int(state.get("border_width") or 2),
                                  color=state.get("border_color") or "#3b7cf6",
