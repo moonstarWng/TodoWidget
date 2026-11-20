@@ -777,6 +777,10 @@ class SettingsMixin:
         head.bind("<Button-1>", start_move)
         head.bind("<B1-Motion>", do_move)
 
+        # 保存/取消 先占住底部, 内容再多也不会把它挤出窗口
+        buttons = tk.Frame(body, bg=P.bg)
+        buttons.pack(side="bottom", fill="x", padx=16, pady=12)
+
         columns = tk.Frame(body, bg=P.bg)
         columns.pack(fill="both", expand=True, padx=16, pady=(12, 0))
         form = tk.Frame(columns, bg=P.bg)          # 左栏: 名称 / 模式 / 预览
@@ -1267,14 +1271,14 @@ class SettingsMixin:
             if key == "image":
                 image_frame.pack(fill="x")
                 alpha_row.pack(fill="x")
-                resize_window(570)
+                resize_window(640)
                 render_preview()
             elif key == "gradient":
                 gradient_frame.pack(fill="x")
-                resize_window(480)
+                resize_window(500)
             else:
                 solid_frame.pack(fill="x")
-                resize_window(430)
+                resize_window(450)
             if key != "image":
                 alpha_row.pack_forget()
 
@@ -1488,8 +1492,6 @@ class SettingsMixin:
         preview.bind("<ButtonRelease-1>", preview_release)
         preview.bind("<MouseWheel>", preview_wheel)
 
-        buttons = tk.Frame(body, bg=P.bg)
-        buttons.pack(fill="x", padx=16, pady=14)
         cancel = tk.Label(buttons, text="取消", bg=P.bg_alt, fg=P.fg_dim,
                           font=self.f_small, padx=14, pady=6, cursor="hand2")
         cancel.pack(side="right")
@@ -1513,7 +1515,7 @@ class SettingsMixin:
         set_mode(state["mode"])
         render_preview()
 
-        sizes = {"solid": 430, "gradient": 480, "image": 570}
+        sizes = {"solid": 450, "gradient": 500, "image": 640}
         width, height = 660, sizes.get(state["mode"], 430)
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
