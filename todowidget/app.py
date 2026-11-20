@@ -68,6 +68,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_region_size = None
         self._skin_crop_job = None
         self._skin_target = None
+        self._folded_size = None
         self._skin_source = None
         self._skin_source_path = None
         self._fold_job = None
@@ -470,8 +471,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         body.pack(fill="both", expand=True, padx=(6, 3), pady=(6, 0))
 
         # 最小化/恢复、藏到托盘/再显示, 皮肤窗口都跟着主窗口走
-        r.bind("<Map>", lambda e: self.sync_skin(), add="+")
-        r.bind("<Unmap>", lambda e: self.sync_skin(), add="+")
+        r.bind("<Map>", lambda e: self.root.after_idle(self.sync_skin),
+               add="+")
+        r.bind("<Unmap>", lambda e: self.root.after_idle(self.sync_skin),
+               add="+")
         r.bind("<FocusOut>", self.on_focus_out)
         r.bind("<Button-1>", self.on_any_click, add="+")
         r.bind("<Configure>", self.on_win_configure, add="+")
@@ -703,12 +706,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             # 收起后不看统计, 先把这一行去掉, 横条才缩得窄
             self.stat_box.pack_forget()
             target_w, target_h = self.folded_width(), folded_h
+            self._folded_size = (target_w, target_h)
             # 下面的内容钉住不动, 跟着窗口边缘被裁掉
             if animate:
                 self.freeze_content()
             animator = self.animate_collapse if animate else None
         else:
             self.restore_layout()
+            self._folded_size = None
             self.btn_fold.config(text="\u25b4")
             target_w, target_h = self._expanded_size or (330, 460)
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
@@ -1046,10 +1051,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def on_win_configure(self, e):
         if e.widget is not self.root:
             return
-        # 挪窗口/改大小都用事件里的坐标立刻同步, 不然图片会慢半拍
-        # 动画期间尺寸由动画自己裁, 这里别用整窗大小把裁好的区域盖回去
+        # 等事件处理完再按真实窗口大小同步, 免得用到过期的事件尺寸(会闪一帧大窗口)
+        # 动画期间尺寸由动画自己裁, 这里不插手
         if self.skin_win is not None and not self._animating:
-            self.sync_skin(e.width, e.height, e.x, e.y)
+            self.root.after_idle(self.sync_skin)
         if getattr(self, "_win_size", None) == (e.width, e.height):
             return
         self._win_size = (e.width, e.height)
@@ -1414,6 +1419,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         win = self.skin_win
         if win is None:
             return
+        if self._animating:
+            # 折叠/展开动画每帧自己裁区域, 别让窗口事件用整窗大小盖回去(会闪出一帧大窗口)
+            return
         root = self.root
         try:
             if root.state() in ("withdrawn", "iconic"):
@@ -1424,6 +1432,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 win.deiconify()
             width = int(width or root.winfo_width())
             height = int(height or root.winfo_height())
+            if self.collapsed and self._folded_size:
+                # 收起状态固定是横条大小, 别被过期的事件尺寸带偏
+                width, height = self._folded_size
             size = (max(2, width), max(2, height))
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
             if clip and self._skin_region_size != size:
