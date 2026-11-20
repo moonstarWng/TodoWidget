@@ -65,6 +65,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_win = None
         self.skin_label = None
         self.skin_photo = None
+        self._skin_image = None
         self._skin_size = None
         self._skin_region_size = None
         self._skin_crop_job = None
@@ -78,6 +79,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_stack_job = None
         self._skin_sync_job = None
         self._skin_geom = None
+        self._skin_stretched = None
         # 主窗口当前的圆角区域大小, 免得重复设
         self._main_region_size = None
         # 列表那层半透明膜的缓存: (宽, 高, 浓度) -> 圆角遮罩
@@ -234,6 +236,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_stack_job = None
         self._skin_sync_job = None
         self._skin_geom = None
+        self._skin_stretched = None
         self._main_region_size = None
         # 换主题后膜的浓度和底色都变了, 缓存作废
         self._scrim_cache = {}
@@ -245,6 +248,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_win = None
         self.skin_label = None
         self.skin_photo = None
+        self._skin_image = None
         self._skin_size = None
         self._skin_region_size = None
         self._skin_crop_job = None
@@ -373,8 +377,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 self._drag_moved = True
             target_x = e.x_root - self._drag[0]
             target_y = e.y_root - self._drag[1]
-            r.geometry("+{}+{}".format(target_x, target_y))
-            self.sync_skin(x=target_x, y=target_y)
+            if self.skin_win is None:
+                # 纯色主题没有皮肤窗口, 直接挪主窗口
+                r.geometry("+{}+{}".format(target_x, target_y))
+            else:
+                self.sync_skin(x=target_x, y=target_y, instant=True)
 
         def end_drag(e, as_click=False):
             moved = getattr(self, "_drag_moved", False)
@@ -1015,8 +1022,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         target = getattr(self, "_resize_target", None)
         if not target:
             return
-        self.root.geometry("{}x{}".format(target[0], target[1]))
-        self.sync_skin(target[0], target[1])
+        if self.skin_win is None:
+            self.root.geometry("{}x{}".format(int(target[0]), int(target[1])))
+            return
+        self.sync_skin(target[0], target[1], instant=True)
         self.schedule_skin_crop()
 
     def end_resize(self, e):
@@ -1031,11 +1040,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self._resize_job = None
         target = getattr(self, "_resize_target", None)
         if target:
-            self.root.geometry("{}x{}".format(target[0], target[1]))
+            # 最后一帧可能还没应用, 这里补一次
+            self.sync_skin(target[0], target[1], instant=True)
         self._resize_target = None
         self._resize_from = None
         self._resizing = False
         self.round_window()
+        # 拖动过程中只是把上一张图拉伸顶上, 松手才正经按最终尺寸裁一次
+        self._skin_size = None
         self.refresh_skin_crop()
         self.save_geom()
 
@@ -1378,9 +1390,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.skin_win = None
         self.skin_label = None
         self.skin_photo = None
+        self._skin_image = None
         self._skin_size = None
         self._skin_region_size = None
         self._skin_geom = None
+        self._skin_stretched = None
         if win is not None:
             try:
                 win.destroy()
@@ -1549,7 +1563,36 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
+            self._skin_image = image
             self._skin_size = (width, height)
+        except Exception:
+            pass
+
+    def stretch_skin_image(self, width, height):
+        """拖动改大小时先用上一张底图拉伸顶上, 松手再正经裁一次
+
+        正经裁一次要重采样整张原图(10ms 上下), 每帧都这么干拖起来会卡;
+        拉伸一张已经裁好的小图不到 1ms, 视觉上也就这一两百毫秒。
+
+        :param width: 目标宽
+        :param height: 目标高
+        """
+        image = self._skin_image
+        if image is None:
+            return
+        width = max(2, int(width))
+        height = max(2, int(height))
+        if (width, height) == self._skin_stretched:
+            return
+        self._skin_stretched = (width, height)
+        try:
+            from PIL import Image
+            sized = image.resize((width, height), Image.BILINEAR)
+            photo = ImageTk.PhotoImage(sized)
+            self.skin_label.configure(image=photo)
+            self.skin_photo = photo
+            # 记成"没正经裁过": 松手 / 空闲时会按最终尺寸重裁
+            self._skin_size = None
         except Exception:
             pass
 
@@ -1733,6 +1776,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def scrim_missing(self):
         """该铺膜却没铺上(启动时布局还没算好), 需要重裁一次底图"""
+        if self._resizing:
+            # 拖动中不补, 松手时统一重裁
+            return False
         spec = self.skin_spec()
         if spec is None or self.skin_scrim_alpha(spec) <= 0:
             return False
@@ -1756,6 +1802,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def refresh_skin_crop(self):
         """窗口大小定下来以后重裁一次皮肤底图"""
         if self.skin_win is None or self._animating or self.collapsed:
+            return
+        if self._resizing:
+            # 拖动中走"拉伸上一张图"的快路径, 别在这儿重采样整张原图
             return
         width = max(40, self.root.winfo_width())
         height = max(40, self.root.winfo_height())
@@ -1797,6 +1846,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         窗口一次变化会连着来一串事件, 每个都排一个同步的话,
         皮肤窗口会被反复挪位置/重画, 收起的时候就看着一闪一闪的。
         """
+        if self._resizing:
+            # 拖动中由 apply_resize_size 逐帧同步, 这里再补一次纯属多干活
+            return
         if self._skin_sync_job is not None:
             return
         self._skin_sync_job = self.root.after_idle(self.run_skin_sync)
@@ -1806,7 +1858,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_sync_job = None
         self.sync_skin()
 
-    def sync_skin(self, width=None, height=None, x=None, y=None, clip=True):
+    def sync_skin(self, width=None, height=None, x=None, y=None, clip=True,
+                  instant=False):
         """让皮肤窗口跟着主窗口的位置/大小, 并压在主窗口下面
 
         :param width: 可见宽度(动画时传当前帧的值)
@@ -1814,6 +1867,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         :param x: 主窗口左上角屏幕坐标, 不传就现取
         :param y: 同上
         :param clip: 要不要顺手把皮肤区域裁成这个大小
+        :param instant: 拖动中: 两个窗口用一次 SetWindowPos 同步挪, 不等空闲
         """
         win = self.skin_win
         if win is None:
@@ -1842,8 +1896,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 width, height = self._folded_size
             size = (max(2, width), max(2, height))
             if not self.collapsed and (size != self._skin_size or self.scrim_missing()):
-                # 先把底图裁成新尺寸, 再把窗口撑大, 中间不会露出空白
-                self.reload_skin_image(size[0], size[1], force=True)
+                if self._resizing and self._skin_image is not None:
+                    # 拖动改大小: 先把上一张图拉伸顶上(不到 1ms), 松手再正经裁
+                    self.stretch_skin_image(size[0], size[1])
+                else:
+                    # 先把底图裁成新尺寸, 再把窗口撑大, 中间不会露出空白
+                    self.reload_skin_image(size[0], size[1], force=True)
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
             if clip and self._skin_region_size != size:
                 self.clip_skin(width, height)
@@ -1852,6 +1910,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             if y is None:
                 y = root.winfo_rooty()
             geometry = (size[0], size[1], int(x), int(y))
+            if instant:
+                # 拖动时: 主窗口和皮肤窗口一次性挪到位, 不经过 Tk 的空闲队列。
+                # 分两帧到的话, 中间那一帧底图会晚半拍, 看着就是闪。
+                self.apply_window_rect(*geometry)
+                return
             # 顺序不能反: SetWindowPos 会让 Tk 把窗口的旧位置当成"已成事实",
             # 先把窗口排到下面, 再改位置, 位置请求才不会被作废
             self.place_skin_below()
@@ -1859,6 +1922,37 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 # 位置大小没变就别再设一遍, 重复设会让皮肤窗口重画(收起时会闪)
                 win.geometry("{}x{}+{}+{}".format(*geometry))
                 self._skin_geom = geometry
+        except Exception:
+            pass
+
+    def apply_window_rect(self, width, height, x, y):
+        """把主窗口和皮肤窗口一起摆到同一块矩形上(拖动时用)
+
+        两个窗口在同一个调用里 SetWindowPos, 桌面合成器会把它们放在同一帧,
+        不会出现"底图还在上一格"的那一帧。
+
+        :param width: 宽
+        :param height: 高
+        :param x: 屏幕横坐标
+        :param y: 屏幕纵坐标
+        """
+        width = max(2, int(width))
+        height = max(2, int(height))
+        x = int(x)
+        y = int(y)
+        try:
+            user32 = ctypes.windll.user32
+            no_zorder = 0x0004
+            no_activate = 0x0010
+            main = self.main_hwnd()
+            user32.SetWindowPos(main, 0, x, y, width, height,
+                                no_zorder | no_activate)
+            skin = self.skin_hwnd()
+            if skin:
+                # 顺便把它压在主窗口下面, 一步到位
+                user32.SetWindowPos(skin, main, x, y, width, height,
+                                    no_activate)
+                self._skin_geom = (width, height, x, y)
         except Exception:
             pass
 
