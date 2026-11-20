@@ -59,7 +59,7 @@ class ListMenuMixin:
         x = self.lbl_title.winfo_rootx()
         y = self.lbl_title.winfo_rooty() + self.lbl_title.winfo_height() + 2
         try:
-            menu.tk_popup(x, y)
+            self.popup_menu(menu, x, y)
         finally:
             menu.grab_release()
 

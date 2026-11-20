@@ -19,6 +19,7 @@ from .paths import APP_DIR, CONF_FILE
 from .store import Store
 from . import theme as T
 from .anim import Tween, ease_in_out_cubic, mix_hex
+from .listpaint import ListPaintMixin
 from .theme import (P, GRADIENTS, apply_palette, custom_scheme, hex_to_rgb,
                     mix_color, pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
@@ -34,7 +35,8 @@ from .ui_settings import SettingsMixin
 SKIN_KEY = "#010203"
 
 
-class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
+class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
+              ListPaintMixin):
     """主窗口(按功能拆在几个 Mixin 里)"""
 
     def __init__(self, root, store=None):
@@ -81,6 +83,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_sync_job = None
         self._skin_geom = None
         self._skin_stretched = None
+        self._skin_base = None
+        # 列表自绘用的字体/文字起点缓存
+        self._list_fonts = {}
+        self._list_text_x = {}
+        self._glyph_ok = {}
+        self._list_paint_job = None
+        # 弹着菜单的时候不要重画皮肤, 不然会盖住菜单闪一下
+        self._menu_open = False
         # 主窗口当前的圆角区域大小, 免得重复设
         self._main_region_size = None
         # 列表那层半透明膜的缓存: (宽, 高, 浓度) -> 圆角遮罩
@@ -258,6 +268,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_sync_job = None
         self._skin_geom = None
         self._skin_stretched = None
+        self._skin_base = None
+        self._list_fonts = {}
+        self._list_text_x = {}
+        self._glyph_ok = {}
+        self._list_paint_job = None
+        self._menu_open = False
         self._main_region_size = None
         # 换主题后膜的浓度和底色都变了, 缓存作废
         self._scrim_cache = {}
@@ -286,20 +302,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.f_item = pick_font(r, 10)
         self.f_item_done = pick_font(r, 10, overstrike=True)
         self.f_small = pick_font(r, 8)
-        # 皮肤模式文字是压在底图上的, 加粗一点抗锯齿的边就不那么显糊
+        # 自绘之后文字是灰度抗锯齿, 不用再加粗; 日期稍微放大一点更好认
+        self.f_item_skin = self.f_item
+        self.f_item_skin_done = self.f_item_done
+        self.f_group_skin = self.f_group
+        self.f_group_skin_done = self.f_group_done
         if self.skin_spec() is not None:
-            self.f_item_skin = pick_font(r, 10, "bold")
-            self.f_item_skin_done = pick_font(r, 10, "bold", True)
-            # 列表项加粗后跟分组一样重, 分组放大一号把层次找回来
-            self.f_group_skin = pick_font(r, 11, "bold")
-            self.f_group_skin_done = pick_font(r, 11, "bold", True)
-            # 日期这种小字压在图上本来就糊, 放大一号
             self.f_small_skin = pick_font(r, 9)
         else:
-            self.f_item_skin = self.f_item
-            self.f_item_skin_done = self.f_item_done
-            self.f_group_skin = self.f_group
-            self.f_group_skin_done = self.f_group_done
             self.f_small_skin = self.f_small
         self.f_note_h1 = pick_font(r, 13, "bold")
         self.f_note_h2 = pick_font(r, 11, "bold")
@@ -460,7 +470,16 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         sb = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview,
                            style="Todo.Vertical.TScrollbar")
         self.scroll = sb
-        self.tree.configure(yscrollcommand=sb.set)
+        def on_tree_scroll(first, last):
+            """滚动条位置变了: 顺手把自绘的列表重画一遍
+
+            :param first: 可见区起点比例
+            :param last: 可见区终点比例
+            """
+            sb.set(first, last)
+            self.list_paint_later()
+
+        self.tree.configure(yscrollcommand=on_tree_scroll)
         sb.pack(side="right", fill="y", pady=2)
         self.tree.pack(side="left", fill="both", expand=True)
         # 列表区大小定下来以后, 底下那层膜要按新区域重铺(窗口刚改大时布局会晚一拍)
@@ -487,6 +506,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.tree.tag_configure("day", font=self.f_small_skin, foreground=P.fg_dim)
 
         self.tree.bind("<space>", lambda e: self.toggle(self.tree.focus()))
+        # 选中变了要重画自绘的底色条
+        self.tree.bind("<<TreeviewSelect>>",
+                       lambda e: self.list_paint_later(), add="+")
         self.tree.bind("<Double-1>", self.on_double_click)
         self.tree.bind("<Insert>", lambda e: self.add_sibling())
         self.tree.bind("<Control-Insert>", lambda e: self.add_child())
@@ -573,6 +595,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.apply_resize_state()
         if self.skin_spec() is not None:
             self.apply_skin_key()
+            self.list_paint_key_out()
         # 纯色模式要把列表区盖成不透明底, 必须放在 apply_skin_key 之后
         self.apply_panel_mode()
         self.apply_border_frame()
@@ -1624,17 +1647,37 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 base = Image.new("RGB", image.size, hex_to_rgb(P.bg))
                 image = Image.blend(image, base, strength)
             image = self.apply_skin_scrim(image, spec)
-            self._skin_plain = image.copy()
-            rect = None
-            if self.collapsed and self._folded_size:
-                folded_w, folded_h = self._folded_size
-                rect = (0, 0, folded_w, folded_h)
-            image = self.apply_border(image, rect)
+            self._skin_base = image.copy()
+            image = self.compose_skin(self._skin_base)
+            self.skin_push_image(image)
+            self._skin_size = (width, height)
+        except Exception:
+            pass
+
+    def compose_skin(self, base):
+        """由"底图 + 膜"合成最终皮肤图: 列表自绘 + 边框
+
+        :param base: 已经处理好底图和膜的那张图(RGB)
+        """
+        image = base.copy()
+        image = self.list_paint_draw(image)
+        self._skin_plain = image.copy()
+        rect = None
+        if self.collapsed and self._folded_size:
+            folded_w, folded_h = self._folded_size
+            rect = (0, 0, folded_w, folded_h)
+        return self.apply_border(image, rect)
+
+    def skin_push_image(self, image):
+        """把合成好的图贴到皮肤窗口上
+
+        :param image: 要显示的图(PIL RGB)
+        """
+        try:
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
             self._skin_image = image
-            self._skin_size = (width, height)
         except Exception:
             pass
 
@@ -2388,6 +2431,36 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     # ---------------- 多清单 ----------------
 
+    def popup_menu(self, menu, x, y):
+        """弹一个菜单; 弹的时候把皮肤窗口的置顶让出来, 否则菜单会被压住
+
+        :param menu: 已经建好的 tk.Menu
+        :param x: 屏幕横坐标
+        :param y: 屏幕纵坐标
+        """
+        self._menu_open = True
+        want_top = bool(self.topmost)
+        try:
+            if want_top:
+                self.root.attributes("-topmost", False)
+                if self.skin_win is not None:
+                    self.skin_win.attributes("-topmost", False)
+        except Exception:
+            pass
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            self._menu_open = False
+            try:
+                if want_top:
+                    self.root.attributes("-topmost", True)
+                    if self.skin_win is not None:
+                        self.skin_win.attributes("-topmost", True)
+            except Exception:
+                pass
+            self.root.after_idle(self.restack_skin)
+            self.list_paint_later()
+
     def popup_header(self, e):
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label="设置…", command=self.open_settings)
@@ -2399,7 +2472,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         m.add_checkbutton(label="锁定窗口大小", command=self.toggle_resize_lock,
                           variable=tk.BooleanVar(value=self.resize_locked))
         m.add_command(label="退出", command=self.quit)
-        m.tk_popup(e.x_root, e.y_root)
+        self.popup_menu(m, e.x_root, e.y_root)
 
     def apply_window(self):
         r = self.root

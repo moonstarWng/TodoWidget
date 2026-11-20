@@ -563,10 +563,7 @@ class SettingsMixin:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="复制为自定义配色…",
                          command=lambda: self.copy_theme(kind, key))
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+        self.popup_menu(menu, event.x_root, event.y_root)
 
     def copy_theme(self, kind, key):
         """把内置配色复制一份出来做自定义
@@ -627,10 +624,7 @@ class SettingsMixin:
                          command=lambda: self.copy_custom_theme(theme))
         menu.add_command(label="删除配色",
                          command=lambda: self.delete_custom_theme(theme))
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+        self.popup_menu(menu, event.x_root, event.y_root)
 
     def delete_custom_theme(self, theme):
         """删掉一份自定义配色"""

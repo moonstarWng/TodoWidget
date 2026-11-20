@@ -79,6 +79,9 @@ class ListViewMixin:
 
         t.delete(*t.get_children())
         self._refs.clear()
+        # 自绘模式下文字由我们自己画进底图, Treeview 里留空(不然会叠一层毛边字)
+        paint = self.list_paint_active()
+        self._row_text = {}
         self._hover = None
         self._marked = None
 
@@ -104,9 +107,12 @@ class ListViewMixin:
             iid = it["id"]
             if iid in open_state:
                 it["open"] = open_state[iid]
-            options = {"iid": iid, "text": text, "tags": (tag,),
+            options = {"iid": iid, "text": "" if paint else text,
+                       "tags": (tag,),
                        "open": it.get("open", True),
                        "values": ("\U0001F4CC",) if it.get("pinned") else ("",)}
+            if paint:
+                self._row_text[iid] = text.strip()
             if image is not None:
                 options["image"] = image
             t.insert(parent, "end", **options)
@@ -131,8 +137,10 @@ class ListViewMixin:
                 default_open = not getattr(self, "_days_collapsed", False)
                 is_open = self._day_open.get(day, default_open)
                 label = "  {}  ·  {}".format(self.format_day(day), len(group))
-                t.insert("", "end", iid=group_iid, tags=("day",), text=label,
-                         open=is_open)
+                t.insert("", "end", iid=group_iid, tags=("day",),
+                         text="" if paint else label, open=is_open)
+                if paint:
+                    self._row_text[group_iid] = label.strip()
                 for it in group:
                     insert_item(group_iid, it, self.store.items)
         elif self.sort_mode == "time":
@@ -141,16 +149,23 @@ class ListViewMixin:
                 day = self.item_time(it)[:10]
                 if day != shown_day:
                     shown_day = day
+                    sep_text = "  " + self.format_day(day)
                     t.insert("", "end", iid="__sep__" + (day or "none"),
-                             tags=("sep",), text="  " + self.format_day(day))
+                             tags=("sep",),
+                             text="" if paint else sep_text)
+                    if paint:
+                        self._row_text["__sep__" + (day or "none")] = sep_text.strip()
                 insert_item("", it, self.store.items)
         else:
             for it in roots:
                 insert_item("", it, self.store.items)
         if not t.get_children():
+            empty_text = ("  （还没有已完成的任务）" if self.tab == "done"
+                          else "  （没有未完成的任务）")
             t.insert("", "end", iid="__empty__", tags=("empty",),
-                     text="  （还没有已完成的任务）" if self.tab == "done"
-                     else "  （没有未完成的任务）")
+                     text="" if paint else empty_text)
+            if paint:
+                self._row_text["__empty__"] = empty_text.strip()
         if sel and t.exists(sel):
             t.focus(sel)
             t.selection_set(sel)
@@ -169,6 +184,7 @@ class ListViewMixin:
             self.pbar.place_configure(relwidth=(done / total) if total else 0)
         except Exception:
             pass
+        self.list_paint_later()
         self.root.after_idle(self.sync_scroll)
 
     def sync_scroll(self):
@@ -211,12 +227,14 @@ class ListViewMixin:
         if iid and iid in self._refs:
             self._hover = iid
             self.tree.item(iid, tags=(self.base_tag(iid) + "_h",))
+        self.list_paint_later()
 
     def clear_hover(self):
         iid = getattr(self, "_hover", None)
         self._hover = None
         if iid and self.tree.exists(iid):
             self.tree.item(iid, tags=(self.base_tag(iid),))
+        self.list_paint_later()
 
     def base_tag(self, iid):
         ref = self._refs.get(iid)
@@ -506,12 +524,14 @@ class ListViewMixin:
     def mark_row(self, iid):
         self._marked = iid
         self.tree.item(iid, tags=("drop_" + self.base_tag(iid),))
+        self.list_paint_later()
 
     def clear_marks(self):
         iid = getattr(self, "_marked", None)
         self._marked = None
         if iid and self.tree.exists(iid):
             self.tree.item(iid, tags=(self.base_tag(iid),))
+        self.list_paint_later()
 
     def hide_hint(self):
         try:
@@ -651,6 +671,8 @@ class ListViewMixin:
             return 0
         if not bbox:
             return 0
+        if self.list_paint_active():
+            return self.list_paint_text_x(iid, bbox)
         left = bbox[0]
         mid_y = bbox[1] + bbox[3] // 2
         limit = left + min(bbox[2], 240)
@@ -758,6 +780,6 @@ class ListViewMixin:
         m.add_separator()
         m.add_command(label="全部展开", command=lambda: self.collapse_all(False))
         m.add_command(label="全部折叠", command=lambda: self.collapse_all(True))
-        m.tk_popup(e.x_root, e.y_root)
+        self.popup_menu(m, e.x_root, e.y_root)
 
     # ---------------- 窗口形态 ----------------
