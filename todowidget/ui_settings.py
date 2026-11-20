@@ -398,6 +398,112 @@ class SettingsMixin:
                            lambda: self.choose_scrim_mode("off"),
                            group="scrim", value="off")
 
+        # ---- 边框 ----
+        holder = self.settings_block(panel, "边框",
+                                     "窗口外圈那一条: 可以不画, 也可以单色或渐变")
+        self.settings_chip(holder, "无", self.border_mode == "none",
+                           lambda: self.choose_border_mode("none"),
+                           group="border", value="none")
+        self.settings_chip(holder, "单色", self.border_mode == "solid",
+                           lambda: self.choose_border_mode("solid"),
+                           group="border", value="solid")
+        self.settings_chip(holder, "渐变", self.border_mode == "gradient",
+                           lambda: self.choose_border_mode("gradient"),
+                           group="border", value="gradient")
+
+        width_row = tk.Frame(holder.master, bg=P.bg)
+        width_row.pack(fill="x", pady=(8, 0))
+        tk.Label(width_row, text="粗细", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small).pack(side="left")
+        border_scale = tk.Scale(width_row, from_=1, to=6, resolution=1,
+                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
+                                troughcolor=P.bg_alt, highlightthickness=0,
+                                bd=0, sliderrelief="flat", showvalue=False,
+                                length=190, command=self.choose_border_width)
+        border_scale.set(self.border_width)
+        border_scale.pack(side="left", padx=8)
+        tk.Label(width_row, text="px", bg=P.bg, fg=P.fg_faint,
+                 font=self.f_small).pack(side="left")
+
+        color_row = tk.Frame(holder.master, bg=P.bg)
+        color_row.pack(fill="x", pady=(6, 0))
+        tk.Label(color_row, text="颜色", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small).pack(side="left")
+        border_swatch = tk.Frame(color_row, bg=self.border_color, width=36,
+                                 height=22, highlightthickness=1,
+                                 highlightbackground=P.border, cursor="hand2")
+        border_swatch.pack(side="left", padx=(8, 0))
+        border_swatch.pack_propagate(False)
+        border_swatch.bind("<Button-1>", lambda ev: pick_border_color(1))
+        border_swatch2 = tk.Frame(color_row, bg=self.border_color2, width=36,
+                                  height=22, highlightthickness=1,
+                                  highlightbackground=P.border, cursor="hand2")
+        border_swatch2.pack(side="left", padx=(6, 0))
+        border_swatch2.pack_propagate(False)
+        border_swatch2.bind("<Button-1>", lambda ev: pick_border_color(2))
+
+        def pick_border_color(which):
+            """选边框颜色; which=1 主色, 2 渐变的第二个颜色"""
+            current = self.border_color if which == 1 else self.border_color2
+            _, picked = colorchooser.askcolor(
+                color=current, parent=self.settings_win, title="选择边框颜色")
+            if not picked:
+                return
+            if which == 1:
+                self.border_color = picked
+                border_swatch.configure(bg=picked)
+            else:
+                self.border_color2 = picked
+                border_swatch2.configure(bg=picked)
+            self.apply_skin_effects()
+
+        # ---- 顶栏 / 底栏 ----
+        holder = self.settings_block(
+            panel, "顶栏 / 底栏",
+            "勾上「单独上色」就不再透出底图，可以单独挑一个颜色")
+        head_row = tk.Frame(holder.master, bg=P.bg)
+        head_row.pack(fill="x")
+        tk.Label(head_row, text="顶栏", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, width=4, anchor="w").pack(side="left")
+        head_swatch = tk.Frame(head_row, bg=self.header_color, width=36,
+                               height=22, highlightthickness=1,
+                               highlightbackground=P.border, cursor="hand2")
+        head_swatch.pack(side="left", padx=(8, 0))
+        head_swatch.pack_propagate(False)
+        head_swatch.bind("<Button-1>", lambda ev: pick_bar_color("head"))
+        self.settings_chip(head_row, "单独上色", self.header_split,
+                           lambda: self.toggle_bar_split("head"),
+                           group="barsplit_head", value=True)
+
+        foot_row = tk.Frame(holder.master, bg=P.bg)
+        foot_row.pack(fill="x", pady=(6, 0))
+        tk.Label(foot_row, text="底栏", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, width=4, anchor="w").pack(side="left")
+        foot_swatch = tk.Frame(foot_row, bg=self.footer_color, width=36,
+                               height=22, highlightthickness=1,
+                               highlightbackground=P.border, cursor="hand2")
+        foot_swatch.pack(side="left", padx=(8, 0))
+        foot_swatch.pack_propagate(False)
+        foot_swatch.bind("<Button-1>", lambda ev: pick_bar_color("foot"))
+        self.settings_chip(foot_row, "单独上色", self.footer_split,
+                           lambda: self.toggle_bar_split("foot"),
+                           group="barsplit_foot", value=True)
+
+        def pick_bar_color(which):
+            """选顶栏/底栏的颜色"""
+            current = self.header_color if which == "head" else self.footer_color
+            _, picked = colorchooser.askcolor(
+                color=current, parent=self.settings_win, title="选择颜色")
+            if not picked:
+                return
+            if which == "head":
+                self.header_color = picked
+                head_swatch.configure(bg=picked)
+            else:
+                self.footer_color = picked
+                foot_swatch.configure(bg=picked)
+            self.apply_skin_effects()
+
     THEME_CELL_WIDTH = 78
     THEME_CELL_HEIGHT = 50
 
@@ -591,6 +697,61 @@ class SettingsMixin:
         self.save_conf()
         self.restyle_group("scrim", self.scrim_mode)
         self.refresh_skin_film()
+
+    def choose_border_mode(self, mode):
+        """边框: none 不画 / solid 单色 / gradient 渐变
+
+        :param mode: 目标模式
+        """
+        if mode not in ("none", "solid", "gradient") or mode == self.border_mode:
+            return
+        self.border_mode = mode
+        self.save_conf()
+        self.restyle_group("border", self.border_mode)
+        self.apply_skin_effects()
+
+    def choose_border_width(self, value):
+        """拖边框粗细
+
+        :param value: Scale 给过来的值(字符串)
+        """
+        try:
+            width = max(1, min(6, int(float(value))))
+        except Exception:
+            return
+        if width == self.border_width:
+            return
+        self.border_width = width
+        self.save_conf()
+        # 拖滑块会连着来一串, 攒一下再重铺, 不然一直在重画整窗
+        if getattr(self, "_border_job", None) is not None:
+            try:
+                self.root.after_cancel(self._border_job)
+            except Exception:
+                pass
+        self._border_job = self.root.after(140, self.run_border_apply)
+
+    def run_border_apply(self):
+        """拖完粗细: 重铺一次"""
+        self._border_job = None
+        self.apply_skin_effects()
+
+    def toggle_bar_split(self, which):
+        """顶栏 / 底栏 是否单独上色
+
+        :param which: "head" 或 "foot"
+        """
+        if which == "head":
+            self.header_split = not self.header_split
+            value = self.header_split
+            group = "barsplit_head"
+        else:
+            self.footer_split = not self.footer_split
+            value = self.footer_split
+            group = "barsplit_foot"
+        self.save_conf()
+        self.restyle_group(group, value)
+        self.apply_skin_effects()
 
     def choose_theme(self, key):
         """换配色(整块界面重建)"""

@@ -106,6 +106,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if not mode:
             mode = "frost" if self.conf.get("scrim", True) else "off"
         self.scrim_mode = mode if mode in ("frost", "solid", "off") else "frost"
+        # 外观细节: 外边框 + 顶栏/底栏是否单独上色
+        border = self.conf.get("border") or {}
+        border_mode = border.get("mode")
+        self.border_mode = border_mode if border_mode in ("none", "solid",
+                                                          "gradient") else "none"
+        self.border_width = max(0, min(8, int(border.get("width") or 2)))
+        self.border_color = border.get("color") or "#3b7cf6"
+        self.border_color2 = border.get("color2") or "#8a5cf6"
+        self.header_split = bool(self.conf.get("header_split"))
+        self.header_color = self.conf.get("header_color") or "#17181d"
+        self.footer_split = bool(self.conf.get("footer_split"))
+        self.footer_color = self.conf.get("footer_color") or "#17181d"
         self.bg_image = ""
         self._theme_image = ""
         self.settings_win = None
@@ -143,6 +155,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                          resize_locked=bool(self.resize_locked),
                          show_stat=bool(self.show_stat),
                          scrim_mode=self.scrim_mode,
+                         border=dict(mode=self.border_mode,
+                                     width=self.border_width,
+                                     color=self.border_color,
+                                     color2=self.border_color2),
+                         header_split=bool(self.header_split),
+                         header_color=self.header_color,
+                         footer_split=bool(self.footer_split),
+                         footer_color=self.footer_color,
                          themes=self.custom_themes)
         try:
             with open(CONF_FILE, "w", encoding="utf-8") as f:
@@ -284,11 +304,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.f_note_h2 = pick_font(r, 11, "bold")
         self.f_note_bold = pick_font(r, 10, "bold")
 
-        # 不留外框: 内容直接铺满, 圆角交给窗口区域裁
+        # 有边框时内容往里让出一圈, 那一圈透出皮肤窗口画的边框
         inner = tk.Frame(r, bg=P.bg)
-        inner.pack(fill="both", expand=True)
+        pad = self.border_pad()
+        inner.pack(fill="both", expand=True, padx=pad, pady=pad)
         self.inner = inner
-        self._frame_pad = 0
+        # 边框占的那一圈也算"卡片四周的留白", 收起横条时要把它算进宽度
+        self._frame_pad = pad
         card = tk.Frame(inner, bg=P.bg)
         card.pack(fill="both", expand=True)
         self.card = card
@@ -552,6 +574,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             self.apply_skin_key()
         # 纯色模式要把列表区盖成不透明底, 必须放在 apply_skin_key 之后
         self.apply_panel_mode()
+        self.apply_border_frame()
+        self.apply_bars()
         # 重建界面后按当前宽度再摆一次, 免得统计/提示停在旧状态
         self._win_size = None
         self.fit_width(self.root.winfo_width())
@@ -863,7 +887,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if canvas is None:
             return
         w = max(1, width or canvas.winfo_width())
-        fill = self.skin_key() if self.skin_spec() is not None else P.head
+        fill = self.header_bg()
         # 复用同一个矩形, 别每帧删掉再画 —— 删掉的那一瞬间会闪一下
         if getattr(self, "_head_rect", None) is None:
             self._head_rect = canvas.create_rectangle(0, 0, w, 40,
@@ -1327,6 +1351,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         mode = spec.get("mode") or ("image" if spec.get("image") else "solid")
         if mode == "gradient":
             return self.gradient_image(spec, width, height)
+        if mode == "solid":
+            from PIL import Image
+            return Image.new("RGB", (max(2, int(width)), max(2, int(height))),
+                             hex_to_rgb(spec.get("bg") or P.bg))
         path = self.bg_image_path()
         if not path:
             return None
@@ -1334,7 +1362,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def make_skin(self):
         """建一块只显示皮肤的窗口, 垫在主窗口下面"""
-        if self.skin_spec() is None:
+        if self.render_spec() is None:
             self.destroy_skin()
             return
         if self.skin_win is None:
@@ -1536,7 +1564,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         :param force: 大小没变也重做一遍(比如只是列表区的膜要重铺)
         """
         win = self.skin_win
-        spec = self.skin_spec()
+        spec = self.render_spec()
         if win is None or spec is None:
             return
         given = width is not None and height is not None
@@ -1560,6 +1588,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 base = Image.new("RGB", image.size, hex_to_rgb(P.bg))
                 image = Image.blend(image, base, strength)
             image = self.apply_skin_scrim(image, spec)
+            image = self.apply_border(image)
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
@@ -1614,6 +1643,158 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
     def panel_color(self):
         """纯色列表的底色: 在主题底色上压一点, 看着像一块面板"""
         return mix_color(P.bg, "#000000", 0.05)
+
+    def border_pad(self):
+        """内容要给边框让出多少像素"""
+        if not self.border_active():
+            return 0
+        return max(1, int(self.border_width))
+
+    def border_active(self):
+        """是不是要画边框"""
+        return self.border_mode in ("solid", "gradient") and self.border_width > 0
+
+    def render_spec(self):
+        """画底图用的规格
+
+        皮肤主题用它自己的; 纯色主题只开了边框时, 也给皮肤窗口一块纯色底,
+        边框才有地方画。
+        """
+        spec = self.skin_spec()
+        if spec is not None:
+            return spec
+        if self.border_active():
+            return {"mode": "solid", "bg": P.bg, "alpha": 0.0}
+        return None
+
+    def apply_border_frame(self):
+        """按边框粗细给内容留出一圈空白, 并让这一圈透出皮肤窗口"""
+        pad = self.border_pad()
+        try:
+            self.inner.pack_configure(padx=pad, pady=pad)
+        except Exception:
+            pass
+        self._frame_pad = pad
+        if self.collapsed:
+            # 收起横条宽度是按顶栏内容算的, 留白变了要重新量一次
+            folded_h = 42 + 2 * pad
+            try:
+                self._folded_size = (self.folded_width(), folded_h)
+                self.root.minsize(140, folded_h)
+                self.root.geometry("{}x{}".format(*self._folded_size))
+            except Exception:
+                pass
+        color = P.bg
+        if self.skin_spec() is not None or self.border_active():
+            color = self.skin_key()
+        try:
+            self.root.configure(bg=color)
+        except Exception:
+            pass
+
+    def border_fill(self, width, height):
+        """边框那圈用什么颜色/渐变, 返回一张 RGB 图
+
+        :param width: 窗口宽
+        :param height: 窗口高
+        """
+        if self.border_mode == "gradient":
+            return self.gradient_image({"grad_start": self.border_color,
+                                        "grad_end": self.border_color2,
+                                        "grad_angle": "diagonal"},
+                                       width, height)
+        from PIL import Image
+        return Image.new("RGB", (width, height), hex_to_rgb(self.border_color))
+
+    def apply_border(self, image):
+        """在底图外围画一圈边框(圆角跟窗口一致)
+
+        :param image: 已经处理好的底图(RGB)
+        """
+        if not self.border_active():
+            return image
+        try:
+            from PIL import Image, ImageChops, ImageDraw
+            width, height = image.size
+            thickness = max(1, min(8, int(self.border_width)))
+            radius = 10
+            scale = 2
+
+            def mask(inset, rad):
+                big = Image.new("L", (width * scale, height * scale), 0)
+                draw = ImageDraw.Draw(big)
+                x0 = inset * scale
+                draw.rounded_rectangle(
+                    [x0, x0, width * scale - 1 - x0, height * scale - 1 - x0],
+                    radius=max(0, rad) * scale, fill=255)
+                return big.resize((width, height), Image.LANCZOS)
+
+            outer = mask(0, radius)
+            inner = mask(thickness, max(1, radius - thickness))
+            ring = ImageChops.subtract(outer, inner)
+            image.paste(self.border_fill(width, height), (0, 0), ring)
+        except Exception:
+            pass
+        return image
+
+    def header_bg(self):
+        """顶栏底色: 单独上色用它, 皮肤模式透明, 纯色主题用主题顶栏色"""
+        if self.header_split:
+            return self.header_color
+        if self.skin_spec() is not None:
+            return self.blank_bg()
+        return P.head
+
+    def footer_bg(self):
+        """底栏底色"""
+        if self.footer_split:
+            return self.footer_color
+        if self.skin_spec() is not None:
+            return self.blank_bg()
+        return P.bg
+
+    def repaint_area(self, widget, color):
+        """把一块区域里"本来是底色"的控件刷成 color(强调色之类不动)
+
+        :param widget: 区域根控件
+        :param color: 目标底色
+        """
+        if widget is None:
+            return
+        replaceable = set()
+        for value in (P.bg, P.head, P.group_bg, self.panel_color(),
+                      self.header_color, self.footer_color):
+            replaceable.add(str(value).lower())
+        try:
+            replaceable.add(str(self.skin_key()).lower())
+        except Exception:
+            pass
+        try:
+            if str(widget.cget("bg")).lower() in replaceable:
+                widget.configure(bg=color)
+        except Exception:
+            pass
+
+        def repaint(node):
+            for child in node.winfo_children():
+                try:
+                    background = str(child.cget("bg")).lower()
+                except Exception:
+                    background = None
+                if background in replaceable:
+                    try:
+                        child.configure(bg=color)
+                    except Exception:
+                        pass
+                repaint(child)
+
+        repaint(widget)
+
+    def apply_bars(self):
+        """顶栏 / 底栏上色(单独上色时铺自己的颜色)"""
+        self.repaint_area(getattr(self, "_head", None), self.header_bg())
+        self.repaint_area(getattr(self, "_foot", None), self.footer_bg())
+        self.paint_head_bg()
 
     def blank_bg(self):
         """"透明"那一档用色: 皮肤模式是色键, 否则是主题底色"""
@@ -1786,6 +1967,32 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return False
         return self.skin_scrim_rect() is not None
 
+    def apply_skin_effects(self):
+        """边框 / 顶栏底栏颜色改了: 立刻重铺一遍
+
+        需要皮肤窗口(图片主题或开着边框)却没有就建一个, 不需要了就去掉。
+        """
+        need_skin = self.render_spec() is not None
+        try:
+            # 边框那一圈要靠色键透出皮肤窗口, 这里跟着开关
+            key = self.skin_key() if need_skin else ""
+            self.root.attributes("-transparentcolor", key)
+        except Exception:
+            pass
+        if need_skin and self.skin_win is None:
+            self.make_skin()
+        elif not need_skin and self.skin_win is not None:
+            self.destroy_skin()
+        self._skin_size = None
+        self.apply_border_frame()
+        self.apply_panel_mode()
+        self.apply_bars()
+        if self.skin_win is not None:
+            self.reload_skin_image(force=True)
+            self.sync_skin()
+            self.root.after_idle(self.restack_skin)
+        self.refresh()
+
     def refresh_skin_film(self):
         """列表底图模式(磨砂 / 纯色 / 不铺)改了: 立刻重铺一遍"""
         self._scrim_drawn = False
@@ -1794,6 +2001,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             # 先把界面底色打回"透明"的基准, 再按新模式盖
             self.apply_skin_key()
         self.apply_panel_mode()
+        self.apply_border_frame()
+        self.apply_bars()
+        self._skin_size = None
         if self.skin_win is not None:
             self.reload_skin_image(force=True)
             self.sync_skin()
@@ -1922,6 +2132,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 # 位置大小没变就别再设一遍, 重复设会让皮肤窗口重画(收起时会闪)
                 win.geometry("{}x{}+{}+{}".format(*geometry))
                 self._skin_geom = geometry
+                # 刚设过位置/刚显示出来的顶层窗口有时会被抬到最上面,
+                # 等这一轮事件忙完再压回去(压早的话会把位置请求作废)
+                self.root.after_idle(self.restack_skin)
         except Exception:
             pass
 
@@ -1976,8 +2189,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._skin_stack_job = None
         hwnd = self.skin_hwnd()
         if not hwnd:
-            # 还没建好就不再排了, 免得一直占着空闲循环; 下次同步会再压
+            # 刚建出来的皮肤窗口, Tk 的包装窗口要过一小会儿才有句柄:
+            # 隔 30ms 再试几次, 不然它就一直压在界面上
+            tries = getattr(self, "_skin_stack_tries", 0) + 1
+            self._skin_stack_tries = tries
+            if tries <= 12:
+                self._skin_stack_job = self.root.after(30, self.restack_skin)
             return
+        self._skin_stack_tries = 0
         self.stack_skin(hwnd)
 
     def stack_skin(self, hwnd):
@@ -2098,7 +2317,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         r.overrideredirect(True)
         # overrideredirect 一改, Tk 会重建顶层包装窗口, 旧的圆角区域跟着没了
         self._main_region_size = None
-        skin = self.skin_spec()
+        skin = self.render_spec()
         alpha = float(self.alpha)
         try:
             r.attributes("-topmost", bool(self.topmost))
