@@ -71,6 +71,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._folded_size = None
         self._skin_source = None
         self._skin_source_path = None
+        self._skin_key = None
+        self._skin_avg = None
+        self._skin_avg_path = None
+        self._skin_stack_job = None
         self._fold_job = None
         self._animating = False
         self._frozen = []
@@ -182,9 +186,17 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                                         grad.get("fg") or None))
         elif custom is not None:
             bg = custom.get("bg") or "#17181d"
-            if (custom.get("mode") or "") == "gradient":
+            mode = custom.get("mode") or ("image" if custom.get("image") else "solid")
+            # 先记下图片路径, 算平均色要用
+            self._theme_image = custom.get("image") or ""
+            if mode == "gradient":
                 bg = mix_color(custom.get("grad_start") or bg,
                                custom.get("grad_end") or bg, 0.5)
+            elif mode == "image":
+                # 图片主题按图上的平均色配一套颜色, 浅色图才会配深字
+                average = self.skin_average(custom)
+                if average is not None:
+                    bg = "#{:02x}{:02x}{:02x}".format(*average)
             apply_palette(custom_scheme(bg, custom.get("accent") or "#5b9cff",
                                         custom.get("fg") or None))
             self._theme_image = custom.get("image") or ""
@@ -193,6 +205,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.bg_image = self.bg_image_path()
 
     def build_ui(self):
+        # 皮肤相关缓存跟着重建一起重算(透明色/底图平均色都跟主题走)
+        self._skin_key = None
+        self._skin_avg = None
+        self._skin_avg_path = None
+        self._skin_stack_job = None
         self.apply_palette_choice()
         self.stop_title_fade()
         self._frozen = []
@@ -206,7 +223,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self._head_rect = None
         r = self.root
         r.title("待办清单")
-        r.configure(bg=P.border)
+        r.configure(bg=P.bg)
         r.overrideredirect(True)
         r.minsize(270, 220)
 
@@ -220,9 +237,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         self.f_note_h2 = pick_font(r, 11, "bold")
         self.f_note_bold = pick_font(r, 10, "bold")
 
-        # 外层留 1px 当描边
+        # 不留外框: 内容直接铺满, 圆角交给窗口区域裁
         inner = tk.Frame(r, bg=P.bg)
-        inner.pack(fill="both", expand=True, padx=1, pady=1)
+        inner.pack(fill="both", expand=True)
         self.inner = inner
         self._frame_pad = 0
         card = tk.Frame(inner, bg=P.bg)
@@ -636,7 +653,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 fg=pending_color if self.tab == "pending" else P.fg_dim)
             self.tab_labels["done"].config(
                 fg=done_color if self.tab == "done" else P.fg_dim)
-            empty = SKIN_KEY if self.skin_spec() is not None else P.bg
+            empty = self.skin_key() if self.skin_spec() is not None else P.bg
             self.tab_bars["pending"].config(
                 bg=pending_color if self.tab == "pending" else empty)
             self.tab_bars["done"].config(
@@ -665,8 +682,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width += child.winfo_reqwidth()
         # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
         width += 14 + 2 + 8 + 3 * 4 + 4
-        # 外侧 1px 描边 + 图片主题时卡片四周的留白
-        width += 2 + 2 * getattr(self, "_frame_pad", 0)
+        # 图片主题时卡片四周的留白(现在没有外框了)
+        width += 2 * getattr(self, "_frame_pad", 0)
         return max(140, width)
 
     def set_folded(self, folded, on_done=None, animate=True):
@@ -799,7 +816,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         if canvas is None:
             return
         w = max(1, width or canvas.winfo_width())
-        fill = SKIN_KEY if self.skin_spec() is not None else P.head
+        fill = self.skin_key() if self.skin_spec() is not None else P.head
         # 复用同一个矩形, 别每帧删掉再画 —— 删掉的那一瞬间会闪一下
         if getattr(self, "_head_rect", None) is None:
             self._head_rect = canvas.create_rectangle(0, 0, w, 40,
@@ -822,7 +839,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         """
         self.stop_fold_anim()
         head = self._head
-        inner_w = max(1, start_w - 2 - 2 * self._frame_pad)
+        inner_w = max(1, start_w - 2 * self._frame_pad)
         if head.winfo_manager() != "place":
             head.pack_forget()
             head.place(x=0, y=0, width=inner_w, height=40)
@@ -837,11 +854,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             width = max(1, int(round(start_w + (target_w - start_w) * eased)))
             height = max(1, int(round(start_h + (target_h - start_h) * eased)))
             head.place_configure(
-                width=max(1, width - 2 - 2 * self._frame_pad))
+                width=max(1, width - 2 * self._frame_pad))
             # 先把顶栏排好、重画底色, 再把显示区域收上来:
             # 不然区域比顶栏窄一帧会切掉右边的按钮, 按钮移动还会留残影
             head.update_idletasks()
-            self.paint_head_bg(max(1, width - 2 - 2 * self._frame_pad))
+            self.paint_head_bg(max(1, width - 2 * self._frame_pad))
             self.round_window(width, height)
             self.clip_skin(width, height)
             if state["step"] < steps:
@@ -1012,7 +1029,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
     def fit_width(self, width):
         """窗口拖窄时先收起次要文字, 别把折叠、齿轮这些要紧的挤掉"""
-        avail = width - 2 - 2 * getattr(self, "_frame_pad", 0)
+        avail = width - 2 * getattr(self, "_frame_pad", 0)
         narrow = avail < 300 or bool(getattr(self, "collapsed", False))
         tip = getattr(self, "tip", None)
         if tip is not None:
@@ -1088,13 +1105,91 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             return custom
         return None
 
+    def skin_key(self):
+        """皮肤模式里当透明色用的那个颜色
+
+        取底图的平均色再挪开一点点, 这样文字抗锯齿混出来的边也接近图上的颜色,
+        不会在字周围留一圈深色描边(看着像空心字)。
+        """
+        if self._skin_key is not None:
+            return self._skin_key
+        spec = self.skin_spec()
+        if spec is None:
+            return SKIN_KEY
+        average = self.skin_average(spec)
+        if average is None:
+            return SKIN_KEY
+        reserved = self.skin_reserved_colors(spec)
+        key = SKIN_KEY
+        # 挪开 1 起步: 大色块的底图平均色正好是它自己, 不挪的话整块都会变透明
+        for delta in (1, 2, 3, 5, 8):
+            candidate = []
+            for index in range(3):
+                step = delta if index % 2 == 0 else -delta
+                candidate.append((average[index] + step) % 256)
+            text = "#{:02x}{:02x}{:02x}".format(*candidate)
+            if text not in reserved:
+                key = text
+                break
+        self._skin_key = key
+        return key
+
+    def skin_average(self, spec):
+        """算底图的平均色, 按图片路径缓存
+
+        :param spec: 自定义配色字典
+        """
+        mode = spec.get("mode") or ("image" if spec.get("image") else "solid")
+        if mode == "gradient":
+            start = hex_to_rgb(spec.get("grad_start") or "#1b2030")
+            end = hex_to_rgb(spec.get("grad_end") or "#2a2a40")
+            return tuple(int(round((start[i] + end[i]) / 2.0)) for i in range(3))
+        path = self.bg_image_path()
+        if not path:
+            return None
+        if self._skin_avg is not None and self._skin_avg_path == path:
+            return self._skin_avg
+        try:
+            from PIL import Image
+            image = self.skin_source_image(path).resize((8, 8), Image.BILINEAR)
+            pixels = list(image.getdata())
+            average = []
+            for index in range(3):
+                total = sum(pixel[index] for pixel in pixels)
+                average.append(int(round(total / float(len(pixels)))))
+        except Exception:
+            return None
+        self._skin_avg = tuple(average)
+        self._skin_avg_path = path
+        return self._skin_avg
+
+    def skin_reserved_colors(self, spec):
+        """界面上会用到的实色, 透明色不能跟它们撞
+
+        :param spec: 自定义配色字典
+        """
+        names = ("bg", "bg_alt", "head", "border", "group_bg", "hover",
+                 "fg", "fg_dim", "fg_faint", "accent", "done", "group",
+                 "sel", "ghost_bg")
+        reserved = set()
+        for name in names:
+            value = getattr(P, name, None)
+            if isinstance(value, str):
+                reserved.add(value.lower())
+        fg = spec.get("fg")
+        if fg:
+            reserved.add(str(fg).lower())
+        reserved.add("#000000")
+        reserved.add("#ffffff")
+        return reserved
+
     def skin_hwnd(self):
-        """皮肤窗口的原生句柄"""
+        """皮肤窗口的原生句柄(顶层那个; 包装窗口还没建好时返回 0)"""
         win = self.skin_win
         if win is None:
             return 0
         user32 = ctypes.windll.user32
-        return user32.GetParent(win.winfo_id()) or win.winfo_id()
+        return user32.GetParent(win.winfo_id()) or 0
 
     def main_hwnd(self):
         """主窗口的原生句柄"""
@@ -1217,6 +1312,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             except Exception:
                 pass
             self._skin_crop_job = None
+        if self._skin_stack_job is not None:
+            try:
+                self.root.after_cancel(self._skin_stack_job)
+            except Exception:
+                pass
+            self._skin_stack_job = None
         win = self.skin_win
         self.skin_win = None
         self.skin_label = None
@@ -1321,12 +1422,17 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
 
         只改底色, 文字/图标保持不透明。
         """
-        key = SKIN_KEY
-        for widget in (self.inner, self.card):
+        key = self.skin_key()
+        for widget in (self.root, self.inner, self.card):
             try:
                 widget.configure(bg=key)
             except Exception:
                 pass
+        try:
+            # 透明色跟着底图平均色走, 文字抗锯齿的边才不会发黑
+            self.root.attributes("-transparentcolor", key)
+        except Exception:
+            pass
 
         def recolor(widget):
             for child in widget.winfo_children():
@@ -1351,15 +1457,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
 
-    def reload_skin_image(self):
-        """按窗口大小把皮肤底图弄好"""
+    def reload_skin_image(self, width=None, height=None):
+        """按窗口大小把皮肤底图弄好
+
+        :param width: 指定宽度, 不传就用当前窗口的
+        :param height: 指定高度
+        """
         win = self.skin_win
         spec = self.skin_spec()
         if win is None or spec is None:
             return
-        width = max(40, self.root.winfo_width())
-        height = max(40, self.root.winfo_height())
-        if self.collapsed and self._expanded_size:
+        given = width is not None and height is not None
+        width = max(40, int(width or self.root.winfo_width()))
+        height = max(40, int(height or self.root.winfo_height()))
+        if not given and self.collapsed and self._expanded_size:
             width, height = self._expanded_size
             width = max(40, width)
             height = max(40, height)
@@ -1430,12 +1541,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             if win.state() != "normal":
                 # 主窗口藏起来过又显示出来时, 皮肤窗口也要跟着回来
                 win.deiconify()
+            try:
+                want_top = bool(self.topmost)
+                if bool(win.attributes("-topmost")) != want_top:
+                    win.attributes("-topmost", want_top)
+            except Exception:
+                pass
             width = int(width or root.winfo_width())
             height = int(height or root.winfo_height())
             if self.collapsed and self._folded_size:
                 # 收起状态固定是横条大小, 别被过期的事件尺寸带偏
                 width, height = self._folded_size
             size = (max(2, width), max(2, height))
+            if not self.collapsed and size != self._skin_size:
+                # 先把底图裁成新尺寸, 再把窗口撑大, 中间不会露出空白
+                self.reload_skin_image(size[0], size[1])
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
             if clip and self._skin_region_size != size:
                 self.clip_skin(width, height)
@@ -1443,18 +1563,46 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
                 x = root.winfo_rootx()
             if y is None:
                 y = root.winfo_rooty()
-            win.geometry("{}x{}+{}+{}".format(size[0], size[1], int(x), int(y)))
+            # 顺序不能反: SetWindowPos 会让 Tk 把窗口的旧位置当成"已成事实",
+            # 先把窗口排到下面, 再改位置, 位置请求才不会被作废
             self.place_skin_below()
+            win.geometry("{}x{}+{}+{}".format(size[0], size[1], int(x), int(y)))
         except Exception:
             pass
 
     def place_skin_below(self):
         """把皮肤窗口排到主窗口正下方"""
         try:
+            hwnd = self.skin_hwnd()
+            if not hwnd:
+                # 顶层包装窗口还没建出来, 等这一轮事件忙完再试一次,
+                # 不然底图会盖在界面上
+                if self._skin_stack_job is None:
+                    self._skin_stack_job = self.root.after_idle(
+                        self.restack_skin)
+                return
+            self.stack_skin(hwnd)
+        except Exception:
+            pass
+
+    def restack_skin(self):
+        """补压一次皮肤窗口(包装窗口建好的时候 place_skin_below 还没成)"""
+        self._skin_stack_job = None
+        hwnd = self.skin_hwnd()
+        if not hwnd:
+            # 还没建好就不再排了, 免得一直占着空闲循环; 下次同步会再压
+            return
+        self.stack_skin(hwnd)
+
+    def stack_skin(self, hwnd):
+        """把皮肤窗口的原生句柄压到主窗口下面
+
+        :param hwnd: 皮肤窗口的顶层句柄
+        """
+        try:
             user32 = ctypes.windll.user32
             flags = 0x0001 | 0x0002 | 0x0010  # NOSIZE | NOMOVE | NOACTIVATE
-            user32.SetWindowPos(self.skin_hwnd(), self.main_hwnd(),
-                                0, 0, 0, 0, flags)
+            user32.SetWindowPos(hwnd, self.main_hwnd(), 0, 0, 0, 0, flags)
         except Exception:
             pass
 
@@ -1464,20 +1612,37 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         :param width: 可见宽度
         :param height: 可见高度
         """
-        self.skin_round(width, height)
-        self._skin_region_size = (max(2, int(width)), max(2, int(height)))
+        if self.skin_round(width, height):
+            self._skin_region_size = (max(2, int(width)), max(2, int(height)))
 
     def skin_round(self, width, height):
-        """皮肤窗口也切圆角, 免得从主窗口四角露出来"""
+        """皮肤窗口也切圆角, 免得从主窗口四角露出来
+
+        :param width: 圆角区域宽
+        :param height: 圆角区域高
+        :return: 是否真的设上了(顶层窗口还没建好时设不了)
+        """
         try:
-            gdi32 = ctypes.windll.gdi32
+            win = self.skin_win
+            if win is None:
+                return False
             user32 = ctypes.windll.user32
+            gdi32 = ctypes.windll.gdi32
+            child = win.winfo_id()
+            wrapper = user32.GetParent(child)
+            if not wrapper:
+                # 顶层包装窗口还没建出来。这时往子窗口上设区域,
+                # 等包装窗口出来后就会留一块永远按旧大小裁的区域(拖动改大小时下面就是空的)
+                return False
             w = max(2, int(width))
             h = max(2, int(height))
             rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 20, 20)
-            user32.SetWindowRgn(self.skin_hwnd(), rgn, True)
+            user32.SetWindowRgn(wrapper, rgn, True)
+            # 子窗口上要是残留了旧区域, 会把新大小裁掉, 一并清掉
+            user32.SetWindowRgn(child, None, True)
+            return True
         except Exception:
-            pass
+            return False
 
     def round_window(self, width=None, height=None):
         """无边框 + 圆角, 看着像个小组件
@@ -1541,7 +1706,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
             r.attributes("-alpha", alpha)
             if skin is not None:
                 # 背景色键透明, 文字保持不透明
-                r.attributes("-transparentcolor", SKIN_KEY)
+                r.attributes("-transparentcolor", self.skin_key())
             else:
                 r.attributes("-transparentcolor", "")
         except Exception:
@@ -1574,6 +1739,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin):
         except Exception:
             pass
         self.save_conf()
+        self.sync_skin()
         self.place_skin_below()
         if not self.topmost:
             self.root.after(100, self.sink)

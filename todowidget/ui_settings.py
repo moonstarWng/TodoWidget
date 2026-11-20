@@ -805,8 +805,27 @@ class SettingsMixin:
         alpha_value.pack(side="left", padx=8)
         alpha_row.pack_forget()
 
+        def auto_bg():
+            """自动文字色按哪个底色推: 图片模式按图片平均色, 跟主界面保持一致"""
+            if (state.get("mode") != "image" or not state.get("image")
+                    or Image is None):
+                return state["bg"]
+            image = state.get("_pil")
+            if image is None:
+                try:
+                    path = state["image"]
+                    if not os.path.isabs(path):
+                        path = os.path.join(APP_DIR, path.replace("/", os.sep))
+                    image = Image.open(path).convert("RGB")
+                    image.thumbnail((1600, 1600), Image.LANCZOS)
+                    state["_pil"] = image
+                except Exception:
+                    return state["bg"]
+            pixel = image.resize((1, 1), Image.BILINEAR).getpixel((0, 0))
+            return "#{:02x}{:02x}{:02x}".format(*pixel[:3])
+
         fg_row = row(form, "文字色")
-        fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(state["bg"]),
+        fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(auto_bg()),
                              width=36, height=22, highlightthickness=1,
                              highlightbackground=P.border)
         fg_swatch.pack(side="left")
@@ -847,11 +866,11 @@ class SettingsMixin:
                 state["bg"] = picked
                 bg_swatch.configure(bg=picked)
                 if not state["fg"]:
-                    fg_swatch.configure(bg=auto_text_color(picked))
+                    fg_swatch.configure(bg=auto_text_color(auto_bg()))
 
         def pick_fg():
             _, picked = colorchooser.askcolor(
-                color=state["fg"] or auto_text_color(state["bg"]), parent=win,
+                color=state["fg"] or auto_text_color(auto_bg()), parent=win,
                 title="选择文字颜色")
             if picked:
                 state["fg"] = picked
@@ -859,7 +878,7 @@ class SettingsMixin:
 
         def reset_fg():
             state["fg"] = ""
-            fg_swatch.configure(bg=auto_text_color(state["bg"]))
+            fg_swatch.configure(bg=auto_text_color(auto_bg()))
 
         def pick_accent():
             _, picked = colorchooser.askcolor(color=state["accent"], parent=win,
