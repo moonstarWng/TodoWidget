@@ -810,12 +810,13 @@ class SettingsMixin:
                      font=self.f_small, anchor="w", width=width).pack(side="left")
             return line
 
-        def section(parent, title, desc=""):
+        def section(parent, title, desc="", wrap=280):
             """带细边框的区块, 返回里面放控件的容器
 
             :param parent: 放在哪个页
             :param title: 区块标题
             :param desc: 一行说明
+            :param wrap: 说明文字的折行宽度
             """
             box = tk.Frame(parent, bg=P.bg, highlightthickness=1,
                            highlightbackground=P.border)
@@ -827,9 +828,11 @@ class SettingsMixin:
             if desc:
                 tk.Label(inner, text=desc, bg=P.bg, fg=P.fg_dim,
                          font=self.f_small, anchor="w", justify="left",
-                         wraplength=280).pack(fill="x", pady=(2, 0))
+                         wraplength=wrap).pack(fill="x", pady=(2, 0))
             holder = tk.Frame(inner, bg=P.bg)
             holder.pack(fill="x", pady=(8, 0))
+            # 外框挂在容器上, 需要整块显示/隐藏时用它
+            holder.box = box
             return holder
 
         def dropper(parent, callback):
@@ -856,16 +859,19 @@ class SettingsMixin:
                          highlightcolor=P.accent, font=self.f_item)
         entry.pack(side="left", fill="x", expand=True, ipady=4)
 
-        mode_row = row(form, "模式")
+        mode_box = section(form, "模式", wrap=210)
+        mode_row = tk.Frame(mode_box, bg=P.bg)
+        mode_row.pack(fill="x", pady=(0, 6))
         mode_chips = {}
-        for key, label in (("solid", "纯色"), ("gradient", "渐变"), ("image", "图片")):
+        for key, label in (("solid", "纯色"), ("gradient", "渐变"),
+                           ("image", "图片")):
             chip = tk.Label(mode_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
                             font=self.f_small, padx=14, pady=5, cursor="hand2")
             chip.pack(side="left", padx=(0, 8))
             chip.bind("<Button-1>", lambda ev, k=key: set_mode(k))
             mode_chips[key] = chip
 
-        mode_area = tk.Frame(form, bg=P.bg)
+        mode_area = tk.Frame(mode_box, bg=P.bg)
         mode_area.pack(fill="x")
 
         # 纯色模式: 只挑底色
@@ -920,12 +926,13 @@ class SettingsMixin:
             win_h = self.root.winfo_height() or 460
         except Exception:
             win_w, win_h = 330, 460
-        ph = 236
+        ph = 206
         pw = int(round(ph * float(win_w) / float(win_h)))
         pw = max(120, min(214, pw))
 
-        # 图片模式: 图片 + 拖动裁剪 + 缩放 + 透明度
-        image_frame = tk.Frame(mode_area, bg=P.bg)
+        # 图片模式: 底图 + 列表底图 + 缩放 + 透明度
+        image_frame = section(form, "图片", "底图怎么裁、列表怎么衬", wrap=210)
+        image_card = image_frame.box
         image_row = row(image_frame, "图片")
         image_label = tk.Label(image_row,
                                text=os.path.basename(state["image"]) or "没有",
@@ -946,9 +953,24 @@ class SettingsMixin:
         reset_btn.pack(side="left")
         reset_btn.bind("<Button-1>", lambda ev: reset_view())
 
+        # 列表区怎么衬: 磨砂膜 / 纯色 / 不铺
+        tk.Frame(image_frame, bg=P.border, height=1).pack(fill="x", pady=(6, 8))
+        tk.Label(image_frame, text="列表底图", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, anchor="w").pack(anchor="w")
+        scrim_row = tk.Frame(image_frame, bg=P.bg)
+        scrim_row.pack(fill="x", pady=(6, 0))
+        scrim_chips = {}
+        for key, label in (("frost", "磨砂"), ("solid", "纯色"),
+                           ("off", "不铺")):
+            chip = tk.Label(scrim_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=12, pady=5, cursor="hand2")
+            chip.pack(side="left", padx=(0, 8))
+            chip.bind("<Button-1>", lambda ev, k=key: set_scrim(k))
+            scrim_chips[key] = chip
+
         # 预览对所有模式都显示: 纯色/渐变也能先看效果
-        preview_frame = tk.Frame(form, bg=P.bg)
-        preview_frame.pack(fill="x", pady=(10, 0))
+        preview_frame = section(form, "预览", wrap=210)
+        preview_card = preview_frame.box
         preview = tk.Canvas(preview_frame, width=pw, height=ph, bg=P.bg_alt,
                             highlightthickness=1, highlightbackground=P.border,
                             cursor="fleur")
@@ -969,7 +991,7 @@ class SettingsMixin:
                               bg=P.bg, fg=P.fg_faint, font=self.f_small)
         zoom_value.pack(side="left", padx=8)
 
-        alpha_row = row(form, "透明度", width=6)
+        alpha_row = row(image_frame, "透明度", width=6)
         alpha_scale = tk.Scale(alpha_row, from_=0, to=60, resolution=5,
                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
                                troughcolor=P.bg_alt, highlightthickness=1,
@@ -1032,24 +1054,6 @@ class SettingsMixin:
         accent_btn.pack(side="left", padx=8)
         accent_btn.bind("<Button-1>", lambda ev: pick_accent())
         dropper(accent_row, lambda c: apply_accent(c))
-
-        # ---- 图片模式才有"列表底图", 放左边 ----
-        tk.Frame(image_frame, bg=P.border, height=1).pack(fill="x", pady=(8, 6))
-        tk.Label(image_frame, text="列表底图", bg=P.bg, fg=P.fg,
-                 font=self.f_group).pack(anchor="w")
-        tk.Label(image_frame, text="图片皮肤时列表区怎么画",
-                 bg=P.bg, fg=P.fg_dim, font=self.f_small,
-                 anchor="w").pack(fill="x", pady=(2, 0))
-        scrim_row = tk.Frame(image_frame, bg=P.bg)
-        scrim_row.pack(fill="x", pady=(6, 0))
-        scrim_chips = {}
-        for key, label in (("frost", "磨砂"), ("solid", "纯色"),
-                           ("off", "不铺")):
-            chip = tk.Label(scrim_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
-                            font=self.f_small, padx=12, pady=5, cursor="hand2")
-            chip.pack(side="left", padx=(0, 8))
-            chip.bind("<Button-1>", lambda ev, k=key: set_scrim(k))
-            scrim_chips[key] = chip
 
         # ---- 外观页: 边框 ----
         border_box = section(page_look, "边框",
@@ -1390,10 +1394,9 @@ class SettingsMixin:
                                fg=best_text_color(P.accent) if chosen else P.fg_dim)
             solid_frame.pack_forget()
             gradient_frame.pack_forget()
-            image_frame.pack_forget()
+            image_card.pack_forget()
             if key == "image":
-                image_frame.pack(fill="x")
-                alpha_row.pack(fill="x")
+                image_card.pack(fill="x", before=preview_card)
             elif key == "gradient":
                 gradient_frame.pack(fill="x")
             else:
@@ -1401,8 +1404,6 @@ class SettingsMixin:
             update_hint_text()
             render_preview()
             resize_window()
-            if key != "image":
-                alpha_row.pack_forget()
 
         def show_page(name):
             """切换右栏页签
