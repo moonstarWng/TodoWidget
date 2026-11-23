@@ -792,9 +792,11 @@ class SettingsMixin:
         pages.pack(fill="both", expand=True, pady=(10, 0))
         page_color = tk.Frame(pages, bg=P.bg)
         page_look = tk.Frame(pages, bg=P.bg)
+        page_font = tk.Frame(pages, bg=P.bg)
         tab_chips = {}
 
-        for key, label in (("color", "颜色"), ("look", "外观")):
+        for key, label in (("color", "颜色"), ("look", "外观"),
+                           ("font", "字体")):
             chip = tk.Label(tab_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
                             font=self.f_small, padx=16, pady=6, cursor="hand2")
             chip.pack(side="left", padx=(0, 8))
@@ -807,6 +809,28 @@ class SettingsMixin:
             tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
                      font=self.f_small, anchor="w", width=width).pack(side="left")
             return line
+
+        def section(parent, title, desc=""):
+            """带细边框的区块, 返回里面放控件的容器
+
+            :param parent: 放在哪个页
+            :param title: 区块标题
+            :param desc: 一行说明
+            """
+            box = tk.Frame(parent, bg=P.bg, highlightthickness=1,
+                           highlightbackground=P.border)
+            box.pack(fill="x", pady=(0, 10))
+            inner = tk.Frame(box, bg=P.bg)
+            inner.pack(fill="x", padx=10, pady=8)
+            tk.Label(inner, text=title, bg=P.bg, fg=P.fg,
+                     font=self.f_group).pack(anchor="w")
+            if desc:
+                tk.Label(inner, text=desc, bg=P.bg, fg=P.fg_dim,
+                         font=self.f_small, anchor="w", justify="left",
+                         wraplength=280).pack(fill="x", pady=(2, 0))
+            holder = tk.Frame(inner, bg=P.bg)
+            holder.pack(fill="x", pady=(8, 0))
+            return holder
 
         def dropper(parent, callback):
             """一行里放个吸管按钮, 点了进全屏取色
@@ -977,7 +1001,9 @@ class SettingsMixin:
             pixel = image.resize((1, 1), Image.BILINEAR).getpixel((0, 0))
             return "#{:02x}{:02x}{:02x}".format(*pixel[:3])
 
-        fg_row = row(page_color, "文字色")
+        color_box = section(page_color, "文字与强调色",
+                            "改完看左边的小样")
+        fg_row = row(color_box, "文字色")
         fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(auto_bg()),
                              width=36, height=22, highlightthickness=1,
                              highlightbackground=P.border)
@@ -994,7 +1020,7 @@ class SettingsMixin:
         dropper(fg_row, lambda c: apply_fg(c))
         fg_row.pack(fill="x")
 
-        accent_row = row(page_color, "强调色")
+        accent_row = row(color_box, "强调色")
         accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
                                  height=22, highlightthickness=1,
                                  highlightbackground=P.border)
@@ -1007,18 +1033,15 @@ class SettingsMixin:
         accent_btn.bind("<Button-1>", lambda ev: pick_accent())
         dropper(accent_row, lambda c: apply_accent(c))
 
-        # 下面这些都是"外观"页的内容
-        right = page_look
-
-        # ---- 列表底图(跟着配色走) ----
-        tk.Frame(right, bg=P.border, height=1).pack(fill="x", pady=(4, 10))
-        tk.Label(right, text="列表底图", bg=P.bg, fg=P.fg,
+        # ---- 图片模式才有"列表底图", 放左边 ----
+        tk.Frame(image_frame, bg=P.border, height=1).pack(fill="x", pady=(8, 6))
+        tk.Label(image_frame, text="列表底图", bg=P.bg, fg=P.fg,
                  font=self.f_group).pack(anchor="w")
-        tk.Label(right, text="图片皮肤时列表区怎么画",
+        tk.Label(image_frame, text="图片皮肤时列表区怎么画",
                  bg=P.bg, fg=P.fg_dim, font=self.f_small,
                  anchor="w").pack(fill="x", pady=(2, 0))
-        scrim_row = tk.Frame(right, bg=P.bg)
-        scrim_row.pack(fill="x", pady=(6, 10))
+        scrim_row = tk.Frame(image_frame, bg=P.bg)
+        scrim_row.pack(fill="x", pady=(6, 0))
         scrim_chips = {}
         for key, label in (("frost", "磨砂"), ("solid", "纯色"),
                            ("off", "不铺")):
@@ -1028,11 +1051,11 @@ class SettingsMixin:
             chip.bind("<Button-1>", lambda ev, k=key: set_scrim(k))
             scrim_chips[key] = chip
 
-        # ---- 边框 / 顶栏底栏(这些跟着配色走) ----
-        tk.Label(right, text="边框", bg=P.bg, fg=P.fg,
-                 font=self.f_group).pack(anchor="w")
-        border_row = tk.Frame(right, bg=P.bg)
-        border_row.pack(fill="x", pady=(6, 0))
+        # ---- 外观页: 边框 ----
+        border_box = section(page_look, "边框",
+                             "外圈那一条: 无 / 单色 / 渐变, 粗细和圆角都能调")
+        border_row = tk.Frame(border_box, bg=P.bg)
+        border_row.pack(fill="x")
         border_chips = {}
         for key, label in (("none", "无"), ("solid", "单色"),
                            ("gradient", "渐变")):
@@ -1043,7 +1066,7 @@ class SettingsMixin:
             chip.bind("<Button-1>", lambda ev, k=key: set_border_mode(k))
             border_chips[key] = chip
 
-        width_row = tk.Frame(right, bg=P.bg)
+        width_row = tk.Frame(border_box, bg=P.bg)
         width_row.pack(fill="x", pady=(8, 0))
         tk.Label(width_row, text="粗细", bg=P.bg, fg=P.fg_dim,
                  font=self.f_small, width=6, anchor="w").pack(side="left")
@@ -1052,13 +1075,30 @@ class SettingsMixin:
                                 troughcolor=P.bg_alt, highlightthickness=1,
                                 highlightbackground=P.border,
                                 bd=0, sliderrelief="flat", showvalue=False,
-                                length=150,
+                                length=130,
                                 command=lambda v: set_border_width(v))
         border_scale.pack(side="left")
         tk.Label(width_row, text="px", bg=P.bg, fg=P.fg_faint,
                  font=self.f_small).pack(side="left", padx=6)
 
-        color_row = tk.Frame(right, bg=P.bg)
+        radius_row = tk.Frame(border_box, bg=P.bg)
+        radius_row.pack(fill="x", pady=(6, 0))
+        tk.Label(radius_row, text="圆角", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, width=6, anchor="w").pack(side="left")
+        radius_scale = tk.Scale(radius_row, from_=0, to=14, resolution=1,
+                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
+                                troughcolor=P.bg_alt, highlightthickness=1,
+                                highlightbackground=P.border, bd=0,
+                                sliderrelief="flat", showvalue=False,
+                                length=130,
+                                command=lambda v: set_radius(v))
+        radius_scale.pack(side="left")
+        radius_value = tk.Label(radius_row, text="自动", bg=P.bg,
+                                fg=P.fg_faint, font=self.f_small, width=4,
+                                anchor="w")
+        radius_value.pack(side="left", padx=6)
+
+        color_row = tk.Frame(border_box, bg=P.bg)
         color_row.pack(fill="x", pady=(6, 0))
         tk.Label(color_row, text="颜色", bg=P.bg, fg=P.fg_dim,
                  font=self.f_small, width=6, anchor="w").pack(side="left")
@@ -1076,32 +1116,13 @@ class SettingsMixin:
         border_swatch2.bind("<Button-1>", lambda ev: pick_border(2))
         dropper(color_row, lambda c: apply_border_color(c))
 
-        radius_row = tk.Frame(right, bg=P.bg)
-        radius_row.pack(fill="x", pady=(6, 0))
-        tk.Label(radius_row, text="圆角", bg=P.bg, fg=P.fg_dim,
-                 font=self.f_small, width=6, anchor="w").pack(side="left")
-        radius_scale = tk.Scale(radius_row, from_=0, to=14, resolution=1,
-                                orient="horizontal", bg=P.bg, fg=P.fg_dim,
-                                troughcolor=P.bg_alt, highlightthickness=1,
-                                highlightbackground=P.border, bd=0,
-                                sliderrelief="flat", showvalue=False,
-                                length=150,
-                                command=lambda v: set_radius(v))
-        radius_scale.pack(side="left")
-        radius_value = tk.Label(radius_row, text="自动", bg=P.bg,
-                                fg=P.fg_faint, font=self.f_small, width=4,
-                                anchor="w")
-        radius_value.pack(side="left", padx=6)
-
-        tk.Label(right, text="顶栏 / 底栏", bg=P.bg, fg=P.fg,
-                 font=self.f_group).pack(anchor="w", pady=(14, 0))
-        tk.Label(right, text="勾上「单独上色」就不再透出底图",
-                 bg=P.bg, fg=P.fg_dim, font=self.f_small,
-                 anchor="w").pack(fill="x", pady=(2, 0))
+        # ---- 外观页: 顶栏 / 底栏 ----
+        bars_box = section(page_look, "顶栏 / 底栏",
+                           "勾上「单独上色」就不再透出底图")
         bar_rows = {}
         for key, label in (("header", "顶栏"), ("footer", "底栏")):
-            line = tk.Frame(right, bg=P.bg)
-            line.pack(fill="x", pady=(6, 0))
+            line = tk.Frame(bars_box, bg=P.bg)
+            line.pack(fill="x", pady=(0, 6))
             tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
                      font=self.f_small, width=6, anchor="w").pack(side="left")
             swatch = tk.Frame(line, bg=state[key + "_color"], width=36,
@@ -1117,12 +1138,9 @@ class SettingsMixin:
             dropper(line, lambda c, k=key: apply_bar_color(k, c))
             bar_rows[key] = (swatch, chip)
 
-        # ---- 字体(跟着配色走) ----
-        tk.Label(right, text="字体", bg=P.bg, fg=P.fg,
-                 font=self.f_group).pack(anchor="w", pady=(14, 0))
-        tk.Label(right, text="中文和西文可以分开选；列表按字符自动用对应字体",
-                 bg=P.bg, fg=P.fg_dim, font=self.f_small, anchor="w",
-                 justify="left", wraplength=300).pack(fill="x", pady=(2, 0))
+        # ---- 字体页 ----
+        font_box = section(page_font, "字体",
+                           "中文和西文可以分开选；列表按字符自动用对应字体")
         default_label = "（默认）"
         try:
             tk_fonts = sorted(tkfont.families(win))
@@ -1133,17 +1151,17 @@ class SettingsMixin:
                                           if not name.startswith("@")]
         for key, label, values in (("font_cn", "中文", cn_values),
                                    ("font_latin", "西文", latin_values)):
-            line = tk.Frame(right, bg=P.bg)
-            line.pack(fill="x", pady=(6, 0))
+            line = tk.Frame(font_box, bg=P.bg)
+            line.pack(fill="x", pady=(0, 6))
             tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
                      font=self.f_small, width=6, anchor="w").pack(side="left")
-            box = ttk.Combobox(line, values=values, state="readonly",
-                               width=18, font=self.f_small)
+            combo = ttk.Combobox(line, values=values, state="readonly",
+                                 width=18, font=self.f_small)
             current = state.get(key) or default_label
-            box.set(current if current in values else default_label)
-            box.pack(side="left", fill="x", expand=True)
-            box.bind("<<ComboboxSelected>>",
-                     lambda ev, k=key, b=box: set_font(k, b))
+            combo.set(current if current in values else default_label)
+            combo.pack(side="left", fill="x", expand=True)
+            combo.bind("<<ComboboxSelected>>",
+                       lambda ev, k=key, b=combo: set_font(k, b))
 
         def set_font(key, box):
             """下拉选完字体: 存进草稿并刷新小样
@@ -1168,15 +1186,6 @@ class SettingsMixin:
                 if font is not None:
                     return font
             return preview_font(size, bold)
-
-        note = tk.Label(
-            right,
-            text="图片/渐变：底图铺满整窗，文字不透明。"
-                 "「透明度」= 往底色里混多少，0% 是原图满色。"
-                 "预览里可拖动挪位置、滚轮缩放。",
-            bg=P.bg, fg=P.fg_faint, font=self.f_small, justify="left",
-            wraplength=300, anchor="w")
-        note.pack(fill="x", pady=(12, 0))
 
         def pick_bg():
             _, picked = colorchooser.askcolor(color=state["bg"], parent=win,
@@ -1402,10 +1411,10 @@ class SettingsMixin:
             """
             page_color.pack_forget()
             page_look.pack_forget()
-            if name == "look":
-                page_look.pack(fill="both", expand=True)
-            else:
-                page_color.pack(fill="both", expand=True)
+            page_font.pack_forget()
+            target = {"look": page_look, "font": page_font}.get(name,
+                                                               page_color)
+            target.pack(fill="both", expand=True)
             for key, chip in tab_chips.items():
                 chosen = (key == name)
                 chip.configure(bg=P.accent if chosen else P.bg_alt,
