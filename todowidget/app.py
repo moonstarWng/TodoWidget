@@ -2,6 +2,7 @@
 """主窗口外壳: 布局、页签、折叠、窗口形态、托盘"""
 
 import ctypes
+from ctypes import wintypes
 import json
 import os
 import threading
@@ -34,6 +35,77 @@ from .ui_settings import SettingsMixin
 
 # 色键透明用的颜色: 主窗口里刷成这个色的地方会被当成透明
 SKIN_KEY = "#010203"
+
+
+class _BitmapHeader(ctypes.Structure):
+    """UpdateLayeredWindow 用的 DIB 头"""
+
+    _fields_ = [
+        ("biSize", ctypes.c_uint32),
+        ("biWidth", ctypes.c_int32),
+        ("biHeight", ctypes.c_int32),
+        ("biPlanes", ctypes.c_uint16),
+        ("biBitCount", ctypes.c_uint16),
+        ("biCompression", ctypes.c_uint32),
+        ("biSizeImage", ctypes.c_uint32),
+        ("biXPelsPerMeter", ctypes.c_int32),
+        ("biYPelsPerMeter", ctypes.c_int32),
+        ("biClrUsed", ctypes.c_uint32),
+        ("biClrImportant", ctypes.c_uint32),
+    ]
+
+
+class _BitmapInfo(ctypes.Structure):
+    """DIB 头 + 调色板占位"""
+
+    _fields_ = [("bmiHeader", _BitmapHeader),
+                ("bmiColors", ctypes.c_uint32 * 3)]
+
+
+class _BlendFunction(ctypes.Structure):
+    """UpdateLayeredWindow 的混合参数"""
+
+    _fields_ = [("BlendOp", ctypes.c_ubyte),
+                ("BlendFlags", ctypes.c_ubyte),
+                ("SourceConstantAlpha", ctypes.c_ubyte),
+                ("AlphaFormat", ctypes.c_ubyte)]
+
+
+def _layered_api():
+    """取 UpdateLayeredWindow 那套函数, 顺手声明参数/返回类型
+
+    64 位下句柄是指针, 不声明的话 ctypes 会按 int 截断(之前
+    MonitorFromWindow 一直拿到主屏就是这个原因)。
+    """
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    user32.GetParent.restype = ctypes.c_void_p
+    user32.GetParent.argtypes = [ctypes.c_void_p]
+    user32.GetWindowLongW.restype = ctypes.c_long
+    user32.GetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int]
+    user32.SetWindowLongW.restype = ctypes.c_long
+    user32.SetWindowLongW.argtypes = [ctypes.c_void_p, ctypes.c_int,
+                                      ctypes.c_long]
+    user32.GetDC.restype = ctypes.c_void_p
+    user32.GetDC.argtypes = [ctypes.c_void_p]
+    user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    user32.UpdateLayeredWindow.restype = ctypes.c_bool
+    user32.UpdateLayeredWindow.argtypes = [
+        ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(wintypes.POINT),
+        ctypes.POINTER(wintypes.SIZE), ctypes.c_void_p,
+        ctypes.POINTER(wintypes.POINT), ctypes.c_uint32,
+        ctypes.POINTER(_BlendFunction), ctypes.c_uint32]
+    gdi32.CreateCompatibleDC.restype = ctypes.c_void_p
+    gdi32.CreateCompatibleDC.argtypes = [ctypes.c_void_p]
+    gdi32.CreateDIBSection.restype = ctypes.c_void_p
+    gdi32.CreateDIBSection.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(_BitmapInfo), ctypes.c_uint32,
+        ctypes.POINTER(ctypes.c_void_p), ctypes.c_void_p, ctypes.c_uint32]
+    gdi32.SelectObject.restype = ctypes.c_void_p
+    gdi32.SelectObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    gdi32.DeleteObject.argtypes = [ctypes.c_void_p]
+    gdi32.DeleteDC.argtypes = [ctypes.c_void_p]
+    return user32, gdi32
 
 
 class _SkinPoint:
@@ -83,6 +155,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._skin_crop_job = None
         self._skin_target = None
         self._skin_click = None
+        self._skin_layered = False
+        self._skin_mask_cache = {}
         self._folded_size = None
         self._skin_source = None
         self._skin_source_path = None
@@ -1471,6 +1545,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
+            # 动画期间的区域是 1 位的, 收尾后换回 alpha 的圆角
+            self.drop_skin_regions()
             done()
 
         self._animating = True
@@ -1505,6 +1581,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
+            # 动画期间的区域是 1 位的, 收尾后换回 alpha 的圆角
+            self.drop_skin_regions()
             done()
 
         self._animating = True
@@ -1947,6 +2025,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             label.place(x=0, y=0)
             self.skin_win = win
             self.skin_label = label
+            self._skin_layered = False
+            self._skin_mask_cache = {}
             self._skin_size = None
             self._skin_geom = None
             self.skin_quiet()
@@ -1973,8 +2053,25 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         except Exception:
             pass
 
+    def drop_skin_regions(self):
+        """分层窗口接管圆角以后, 把之前的 1 位窗口区域清掉
+
+        区域是 1 位掩码, 留着它圆角边就还是台阶; alpha 已经画好边了,
+        主窗口和皮肤窗口都可以变回方角。
+        """
+        if not self._skin_layered:
+            return
+        try:
+            self._main_region_size = None
+            self._skin_region_size = None
+            self.round_window()
+            self.clip_skin(self.root.winfo_width(), self.root.winfo_height())
+        except Exception as exc:
+            print("drop skin regions failed:", exc)
+
     def destroy_skin(self):
         """去掉皮肤窗口"""
+        self._skin_layered = False
         if self._skin_crop_job is not None:
             try:
                 self.root.after_cancel(self._skin_crop_job)
@@ -2239,6 +2336,111 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             rect = (0, 0, folded_w, folded_h)
         return self.apply_border(image, rect)
 
+    def skin_alpha_mask(self, width, height):
+        """窗口圆角的 alpha 遮罩(3 倍超采样后缩回来)
+
+        :param width: 宽
+        :param height: 高
+        """
+        radius = max(2, int(self.corner_radius()))
+        key = (int(width), int(height), radius)
+        cached = self._skin_mask_cache.get(key)
+        if cached is not None:
+            return cached
+        over = 3
+        big = Image.new("L", (width * over, height * over), 0)
+        ImageDraw.Draw(big).rounded_rectangle(
+            [0, 0, width * over - 1, height * over - 1],
+            radius=radius * over, fill=255)
+        mask = big.resize((width, height), Image.LANCZOS)
+        if len(self._skin_mask_cache) > 6:
+            self._skin_mask_cache.clear()
+        self._skin_mask_cache[key] = mask
+        return mask
+
+    def layered_bytes(self, image):
+        """把图转成 UpdateLayeredWindow 要的 BGRA 字节(alpha 已预乘)
+
+        :param image: 合成好的图(RGB)
+        """
+        width, height = image.size
+        mask = self.skin_alpha_mask(width, height)
+        rgba = image.convert("RGBA")
+        rgba.putalpha(mask)
+        red, green, blue, alpha = rgba.split()
+        # 预乘: 分层窗口按 alpha 混合, RGB 要事先乘上 alpha
+        red = ImageChops.multiply(red, alpha)
+        green = ImageChops.multiply(green, alpha)
+        blue = ImageChops.multiply(blue, alpha)
+        return Image.merge("RGBA", (blue, green, red, alpha)).tobytes()
+
+    def push_layered_skin(self, image):
+        """把皮肤图按逐像素透明推到皮肤窗口上
+
+        普通窗口只能靠 SetWindowRgn 切圆角, 而窗口区域是 1 位掩码, 圆弧
+        一定是台阶; 换成 UpdateLayeredWindow 传带 alpha 的位图, 边才是
+        抗锯齿的。失败就返回 False, 调用方退回贴图的老路。
+
+        :param image: 已经合成好的图(RGB)
+        """
+        win = getattr(self, "skin_win", None)
+        if win is None or Image is None:
+            return False
+        try:
+            width, height = image.size
+            data = self.layered_bytes(image)
+        except Exception as exc:
+            print("layered skin: image failed:", exc)
+            return False
+        try:
+            user32, gdi32 = _layered_api()
+            hwnd = user32.GetParent(win.winfo_id())
+            if not hwnd:
+                return False
+            style = user32.GetWindowLongW(hwnd, -20)
+            if not style & 0x00080000:  # WS_EX_LAYERED
+                user32.SetWindowLongW(hwnd, -20, style | 0x00080000)
+            screen = user32.GetDC(None)
+            memory = gdi32.CreateCompatibleDC(screen)
+            header = _BitmapHeader()
+            header.biSize = ctypes.sizeof(_BitmapHeader)
+            header.biWidth = width
+            header.biHeight = -height
+            header.biPlanes = 1
+            header.biBitCount = 32
+            info = _BitmapInfo()
+            info.bmiHeader = header
+            bits = ctypes.c_void_p()
+            bitmap = gdi32.CreateDIBSection(memory, ctypes.byref(info), 0,
+                                            ctypes.byref(bits), None, 0)
+            if not bitmap:
+                gdi32.DeleteDC(memory)
+                user32.ReleaseDC(None, screen)
+                return False
+            ctypes.memmove(bits, data, len(data))
+            old = gdi32.SelectObject(memory, bitmap)
+            source = wintypes.POINT(0, 0)
+            target = wintypes.POINT(win.winfo_rootx(), win.winfo_rooty())
+            size = wintypes.SIZE(width, height)
+            blend = _BlendFunction(0, 0, 255, 1)  # AC_SRC_OVER / AC_SRC_ALPHA
+            ok = user32.UpdateLayeredWindow(
+                hwnd, screen, ctypes.byref(target), ctypes.byref(size),
+                memory, ctypes.byref(source), 0, ctypes.byref(blend), 2)
+            gdi32.SelectObject(memory, old)
+            gdi32.DeleteObject(bitmap)
+            gdi32.DeleteDC(memory)
+            user32.ReleaseDC(None, screen)
+            if not ok:
+                return False
+            if not self._skin_layered:
+                self._skin_layered = True
+                # 之前设过 1 位的圆角区域, 会让边还是台阶, 等这一轮忙完清掉
+                self.root.after_idle(self.drop_skin_regions)
+            return True
+        except Exception as exc:
+            print("layered skin failed:", exc)
+            return False
+
     def skin_push_image(self, image):
         """把合成好的图贴到皮肤窗口上
 
@@ -2251,6 +2453,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._skin_image = image
         except Exception:
             pass
+        self.push_layered_skin(image)
 
     def stretch_skin_image(self, width, height):
         """拖动改大小时先用上一张底图拉伸顶上, 松手再正经裁一次
@@ -2275,6 +2478,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             photo = ImageTk.PhotoImage(sized)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
+            self.push_layered_skin(sized)
             # 记成"没正经裁过": 松手 / 空闲时会按最终尺寸重裁
             self._skin_size = None
         except Exception:
@@ -2432,6 +2636,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             image = base.copy()
             image = self.apply_border(
                 image, (0, 0, max(2, int(width)), max(2, int(height))))
+            if self._skin_layered and self.push_layered_skin(image):
+                return
             photo = ImageTk.PhotoImage(image)
             self.skin_label.configure(image=photo)
             self.skin_photo = photo
@@ -2792,6 +2998,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if win.state() != "normal":
                 # 主窗口藏起来过又显示出来时, 皮肤窗口也要跟着回来
                 win.deiconify()
+                # 重新显示出来的窗口可能把分层样式丢了, 补推一次
+                if self._skin_image is not None:
+                    self.push_layered_skin(self._skin_image)
             try:
                 want_top = bool(self.topmost)
                 if bool(win.attributes("-topmost")) != want_top:
@@ -2834,6 +3043,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 # 刚设过位置/刚显示出来的顶层窗口有时会被抬到最上面,
                 # 等这一轮事件忙完再压回去(压早的话会把位置请求作废)
                 self.root.after_idle(self.restack_skin)
+            # 刚建出来时窗口还没显示, 拿不到顶层包装窗口, 分层推送会失败;
+            # 这里等它就位了再补一次
+            if not self._skin_layered and self._skin_image is not None:
+                self.push_layered_skin(self._skin_image)
         except Exception:
             pass
 
@@ -2975,6 +3188,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return False
             w = max(2, int(width))
             h = max(2, int(height))
+            if self._skin_layered and not self._animating:
+                # 圆角已经在 alpha 里了, 再切区域反而把抗锯齿的边切掉
+                user32.SetWindowRgn(wrapper, None, True)
+                return True
             radius = self.corner_radius() * 2
             rgn = gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, radius, radius)
             user32.SetWindowRgn(wrapper, rgn, True)
@@ -2996,6 +3213,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             if not hwnd:
+                return
+            flat_bars = not self.header_split and not self.footer_split
+            if self._skin_layered and not self._animating and flat_bars:
+                # 外圈圆角交给下面那层皮肤窗口的 alpha, 主窗口保持方角。
+                # 顶栏/底栏单独上了色的话它们是实色的, 方角会戳出圆角,
+                # 这种情况还是老老实实切区域
+                if ctypes.windll.user32.SetWindowRgn(hwnd, None, True):
+                    self._main_region_size = size
                 return
             radius = self.corner_radius() * 2
             rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
