@@ -36,6 +36,12 @@ def monitors():
                                    wintypes.HDC, ctypes.POINTER(RECT),
                                    ctypes.c_void_p)
 
+    # 64 位下 HMONITOR 是指针, 不声明 argtypes 的话 ctypes 会按 32 位 int
+    # 传进去, 句柄一截断 GetMonitorInfoW 就失败, 第二块屏会被整个漏掉
+    user32.GetMonitorInfoW.argtypes = [ctypes.c_void_p,
+                                       ctypes.POINTER(MONITORINFO)]
+    user32.GetMonitorInfoW.restype = ctypes.c_bool
+
     def callback(hmonitor, hdc, rect, data):
         try:
             info = MONITORINFO()

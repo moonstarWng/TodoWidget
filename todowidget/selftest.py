@@ -4,7 +4,7 @@
 import os
 import time
 
-from . import updater
+from . import screens, updater
 from .app import TodoApp
 from .paths import APP_DIR, CONF_FILE
 from .store import Store, new_item
@@ -103,6 +103,12 @@ def run_selftest():
                  for item in app.tab_indicator.find_all()]
     check("页签文字在皮肤下走自绘",
           (not app.list_paint_active()) or ("text" not in tab_kinds))
+
+    # 显示器枚举不能漏屏(64 位句柄被截断时双屏只剩主屏)
+    import ctypes
+    system_count = ctypes.windll.user32.GetSystemMetrics(80)
+    check("显示器枚举数量和系统一致",
+          len(screens.monitors()) == system_count)
     first_leaf = None
     second_leaf = None
     first_group = None
@@ -268,6 +274,8 @@ def run_selftest():
                          or expanded_surface == (root.winfo_width(),
                                                  root.winfo_height()))
     check("展开后里层图层跟着放大", expanded_layer_ok)
+    if app.list_paint_active():
+        check("展开后页签恢复不透明", app._tabs_fade >= 0.99)
     # 统计文字按可用宽度自动显示 / 隐藏(窗口有最小宽度, 直接按宽度算)
     app.fit_width(330)
     wide_shown = bool(app.stat_box.winfo_manager())
