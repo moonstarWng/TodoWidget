@@ -786,6 +786,20 @@ class SettingsMixin:
         form.pack(side="left", fill="y")
         right = tk.Frame(columns, bg=P.bg)          # 右栏: 颜色 / 文字 / 边框
         right.pack(side="left", fill="both", expand=True, padx=(18, 0))
+        tab_row = tk.Frame(right, bg=P.bg)
+        tab_row.pack(fill="x")
+        pages = tk.Frame(right, bg=P.bg)
+        pages.pack(fill="both", expand=True, pady=(10, 0))
+        page_color = tk.Frame(pages, bg=P.bg)
+        page_look = tk.Frame(pages, bg=P.bg)
+        tab_chips = {}
+
+        for key, label in (("color", "颜色"), ("look", "外观")):
+            chip = tk.Label(tab_row, text=label, bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=16, pady=6, cursor="hand2")
+            chip.pack(side="left", padx=(0, 8))
+            chip.bind("<Button-1>", lambda ev, k=key: show_page(k))
+            tab_chips[key] = chip
 
         def row(parent, label, width=8):
             line = tk.Frame(parent, bg=P.bg)
@@ -808,7 +822,8 @@ class SettingsMixin:
             return btn
 
 
-        name_row = row(form, "名称")
+        name_row = row(columns, "名称")
+        name_row.pack_configure(before=form)
         name_var = tk.StringVar(value=existing.get("name") or
                                "我的配色 {}".format(len(self.custom_themes) + 1))
         entry = tk.Entry(name_row, textvariable=name_var, bg=P.bg_alt, fg=P.fg,
@@ -956,7 +971,7 @@ class SettingsMixin:
             pixel = image.resize((1, 1), Image.BILINEAR).getpixel((0, 0))
             return "#{:02x}{:02x}{:02x}".format(*pixel[:3])
 
-        fg_row = row(right, "文字色")
+        fg_row = row(page_color, "文字色")
         fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(auto_bg()),
                              width=36, height=22, highlightthickness=1,
                              highlightbackground=P.border)
@@ -973,7 +988,7 @@ class SettingsMixin:
         dropper(fg_row, lambda c: apply_fg(c))
         fg_row.pack(fill="x")
 
-        accent_row = row(right, "强调色")
+        accent_row = row(page_color, "强调色")
         accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
                                  height=22, highlightthickness=1,
                                  highlightbackground=P.border)
@@ -985,6 +1000,9 @@ class SettingsMixin:
         accent_btn.pack(side="left", padx=8)
         accent_btn.bind("<Button-1>", lambda ev: pick_accent())
         dropper(accent_row, lambda c: apply_accent(c))
+
+        # 下面这些都是"外观"页的内容
+        right = page_look
 
         # ---- 列表底图(跟着配色走) ----
         tk.Frame(right, bg=P.border, height=1).pack(fill="x", pady=(4, 10))
@@ -1147,10 +1165,9 @@ class SettingsMixin:
 
         note = tk.Label(
             right,
-            text="渐变 / 图片模式：底图铺满整窗，文字不透明。"
-                 "「透明度」是把底图往底色里混，0% 即原图满色。"
-                 "文字色不选就按底色自动配。"
-                 "图片模式下可在预览里拖动挪位置、滚轮缩放。",
+            text="图片/渐变：底图铺满整窗，文字不透明。"
+                 "「透明度」= 往底色里混多少，0% 是原图满色。"
+                 "预览里可拖动挪位置、滚轮缩放。",
             bg=P.bg, fg=P.fg_faint, font=self.f_small, justify="left",
             wraplength=300, anchor="w")
         note.pack(fill="x", pady=(12, 0))
@@ -1360,15 +1377,50 @@ class SettingsMixin:
             if key != "image":
                 alpha_row.pack_forget()
 
-        def resize_window(height):
-            """按模式把编辑框调高/调矮, 别留一大片空白"""
+        def show_page(name):
+            """切换右栏页签
+
+            :param name: "color" 或 "look"
+            """
+            page_color.pack_forget()
+            page_look.pack_forget()
+            if name == "look":
+                page_look.pack(fill="both", expand=True)
+            else:
+                page_color.pack(fill="both", expand=True)
+            for key, chip in tab_chips.items():
+                chosen = (key == name)
+                chip.configure(bg=P.accent if chosen else P.bg_alt,
+                               fg=best_text_color(P.accent) if chosen
+                               else P.fg_dim)
+            win.after_idle(fit_height)
+
+        def fit_height():
+            """按内容实际需要多高就摆多高
+
+            各模式的内容长度不一样(图片模式多了预览/缩放/透明度),
+            写死高度不是切掉内容就是留一大片空白。
+            """
+            try:
+                win.update_idletasks()
+                need = body.winfo_reqheight()
+            except Exception:
+                return
+            limit = max(420, win.winfo_screenheight() - 120)
+            height = max(380, min(need, limit))
             try:
                 x = win.winfo_x()
                 y = win.winfo_y()
+                if y + height > win.winfo_screenheight() - 40:
+                    y = max(20, win.winfo_screenheight() - height - 40)
                 win.geometry("{}x{}+{}+{}".format(660, height, x, y))
                 win.after(20, lambda w=win: round_corners(w, 12))
             except Exception:
                 pass
+
+        def resize_window(height=None):
+            """切模式后重新量一次高度(参数保留只是兼容旧调用)"""
+            win.after_idle(fit_height)
 
         def set_zoom(value):
             state["zoom"] = max(1.0, min(2.5, float(value) / 100.0))
@@ -1595,6 +1647,7 @@ class SettingsMixin:
         zoom_scale.set(int(round(state["zoom"] * 100)))
         alpha_scale.set(int(round(state["alpha"] * 100)))
         set_angle(state["grad_angle"])
+        show_page("color")
         set_scrim(state["scrim_mode"])
         set_border_mode(state["border_mode"])
         border_scale.set(int(state["border_width"]))
@@ -1604,8 +1657,7 @@ class SettingsMixin:
         set_mode(state["mode"])
         render_preview()
 
-        sizes = {"solid": 545, "gradient": 595, "image": 735}
-        width, height = 660, sizes.get(state["mode"], 545)
+        width, height = 660, 620
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
         y = base.winfo_rooty() + (base.winfo_height() - height) // 2
@@ -1615,6 +1667,7 @@ class SettingsMixin:
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
         win.after(20, lambda w=win: round_corners(w, 12))
+        win.after(30, fit_height)
         win.lift()
         win.focus_force()
         entry.focus_set()
