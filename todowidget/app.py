@@ -20,6 +20,7 @@ from .store import Store
 from . import theme as T
 from .anim import Tween, ease_in_out_cubic, mix_hex
 from .listpaint import ListPaintMixin
+from . import screens
 from .theme import (P, GRADIENTS, apply_palette, custom_scheme, hex_to_rgb,
                     mix_color, pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
@@ -146,6 +147,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if folded:
             self.set_folded(True, animate=False)
         self.start_tray()
+        self.root.after(2500, self.watch_screens)
 
     # ---------------- 配置 ----------------
 
@@ -171,13 +173,78 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             pass
 
     def save_geom(self):
+        """记下窗口大小和位置(同时按当前屏幕配置存一份)"""
         if self.root.state() != "normal" or self._animating:
             return
         w, h = self.root.winfo_width(), self.root.winfo_height()
         if self.collapsed and self._expanded_size:
             w, h = self._expanded_size
-        self.conf["geom"] = "{}x{}+{}+{}".format(w, h, self.root.winfo_x(),
-                                                 self.root.winfo_y())
+        geom = "{}x{}+{}+{}".format(w, h, self.root.winfo_x(),
+                                    self.root.winfo_y())
+        self.conf["geom"] = geom
+        key = screens.layout_key()
+        if key:
+            layouts = dict(self.conf.get("layouts") or {})
+            layouts[key] = geom
+            self.conf["layouts"] = layouts
+            self._screen_key = key
+        self.save_conf()
+
+    def pick_geom(self):
+        """按当前屏幕配置挑窗口位置
+
+        这套屏幕配置以前记过就用记的位置; 没有或者是旧的(已经跑到屏幕外)
+        就夹回当前屏幕里。
+        """
+        key = screens.layout_key()
+        self._screen_key = key
+        layouts = self.conf.get("layouts") or {}
+        saved = layouts.get(key) or self.conf.get("geom") or ""
+        if not saved:
+            return ""
+        return screens.fit_geom(saved) or saved
+
+    def watch_screens(self):
+        """盯着显示器配置: 换了就把窗口摆到那套配置记住的位置"""
+        try:
+            key = screens.layout_key()
+        except Exception:
+            key = ""
+        if key and self._screen_key and key != self._screen_key:
+            # 先把现在的位置记在那套(旧的)配置名下
+            self.save_geom()
+            self._screen_key = key
+            self.place_for_layout(key)
+        self.root.after(2500, self.watch_screens)
+
+    def place_for_layout(self, key):
+        """把窗口摆到某套屏幕配置记住的位置
+
+        :param key: 屏幕配置标识
+        """
+        layouts = dict(self.conf.get("layouts") or {})
+        geom = layouts.get(key) or ""
+        if not geom:
+            geom = "{}x{}+{}+{}".format(self.root.winfo_width(),
+                                        self.root.winfo_height(),
+                                        self.root.winfo_x(),
+                                        self.root.winfo_y())
+        fixed = screens.fit_geom(geom) or geom
+        parsed = screens.parse_geom(fixed)
+        if not parsed:
+            return
+        width, height, x, y = parsed
+        if self.collapsed and self._folded_size:
+            width, height = self._folded_size
+        try:
+            self.root.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        except Exception:
+            return
+        self.sync_skin(x=x, y=y)
+        self.round_window()
+        layouts[key] = "{}x{}+{}+{}".format(width, height, x, y)
+        self.conf["layouts"] = layouts
+        self.conf["geom"] = layouts[key]
         self.save_conf()
 
     # ---------------- 界面 ----------------
@@ -274,6 +341,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._glyph_ok = {}
         self._list_paint_job = None
         self._menu_open = False
+        self._screen_key = ""
         self._main_region_size = None
         # 换主题后膜的浓度和底色都变了, 缓存作废
         self._scrim_cache = {}
@@ -2465,6 +2533,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label="设置…", command=self.open_settings)
         m.add_separator()
+        m.add_command(label="把窗口摆回屏幕里", command=self.reset_position)
         m.add_command(label="显示 / 隐藏", command=self.hide)
         m.add_separator()
         m.add_checkbutton(label="总在最前", command=self.toggle_topmost,
@@ -2473,6 +2542,23 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                           variable=tk.BooleanVar(value=self.resize_locked))
         m.add_command(label="退出", command=self.quit)
         self.popup_menu(m, e.x_root, e.y_root)
+
+    def reset_position(self):
+        """把窗口夹回当前屏幕(换过显示器之后手边能救一下)"""
+        geom = "{}x{}+{}+{}".format(self.root.winfo_width(),
+                                    self.root.winfo_height(),
+                                    self.root.winfo_x(), self.root.winfo_y())
+        fixed = screens.fit_geom(geom) or geom
+        parsed = screens.parse_geom(fixed)
+        if not parsed:
+            return
+        width, height, x, y = parsed
+        if self.collapsed and self._folded_size:
+            width, height = self._folded_size
+        self.root.geometry("{}x{}+{}+{}".format(width, height, x, y))
+        self.sync_skin(x=x, y=y)
+        self.round_window()
+        self.save_geom()
 
     def apply_window(self):
         r = self.root
@@ -2492,7 +2578,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 r.attributes("-transparentcolor", "")
         except Exception:
             pass
-        geom = self.conf.get("geom")
+        geom = self.pick_geom()
         if geom:
             r.geometry(geom)
         else:
