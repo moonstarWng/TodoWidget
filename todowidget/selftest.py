@@ -203,9 +203,13 @@ def run_selftest():
     settle_anim()
     check("展开后宽高恢复",
           root.winfo_width() >= 270 and root.winfo_height() >= 220)
-    wide_enough = root.winfo_width() >= 300
-    check("展开后统计文字按宽度显示",
-          bool(app.stat_box.winfo_manager()) == wide_enough)
+    # 统计文字按可用宽度自动显示 / 隐藏(窗口有最小宽度, 直接按宽度算)
+    app.fit_width(330)
+    wide_shown = bool(app.stat_box.winfo_manager())
+    app.fit_width(200)
+    narrow_hidden = not app.stat_box.winfo_manager()
+    app.fit_width(root.winfo_width())
+    check("统计文字按宽度自动显示/隐藏", wide_shown and narrow_hidden)
     check("展开后标题变回清单名", app.lbl_title.cget("text") != "待办清单")
 
     # 右下角调节柄: 解开时有, 锁住后消失

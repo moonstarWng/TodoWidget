@@ -451,8 +451,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             b.bind("<Leave>", lambda e, w=b: w.configure(fg=P.fg_dim, bg=P.head))
             return b
 
-        icon_btn("\u2715", self.hide)
-        icon_btn("\uff0b", self.add_top)
+        # 只留折叠按钮: 隐藏走右键菜单, 新建走底栏
         self.btn_fold = icon_btn("\u25b4", self.toggle_fold)
 
         # 总进度条
@@ -1282,8 +1281,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 width += self.f_title.measure("待办清单")
                 continue
             width += child.winfo_reqwidth()
-        # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
-        width += 14 + 2 + 8 + 3 * 4 + 4
+        # 圆点 padx(14, 2)、标题 padx(0, 8)、折叠按钮 padx(0, 4) 的留白
+        width += 14 + 2 + 8 + 4 + 4
         # 图片主题时卡片四周的留白(现在没有外框了)
         width += 2 * getattr(self, "_frame_pad", 0)
         return max(140, width)
@@ -1674,8 +1673,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if child is self.stat_box or child is self.head_bg:
                 continue
             total += child.winfo_reqwidth()
-        # 圆点 padx(14, 2)、标题 padx(0, 8)、三个按钮各 padx(0, 4) 的留白
-        total += 14 + 2 + 8 + 3 * 4 + 4
+        # 圆点 padx(14, 2)、标题 padx(0, 8)、折叠按钮 padx(0, 4) 的留白
+        total += 14 + 2 + 8 + 4 + 4
         stat_width = self.stat_box.winfo_reqwidth() or 82
         return total + stat_width + 12
 
