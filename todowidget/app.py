@@ -555,7 +555,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._tab_pill = None
         self._tab_pill_key = None
         self._tab_tween = None
-        self._tabs_fade = 1.0
         self._tab_retry_job = None
         self.tab_indicator = tk.Canvas(tabbar, bg=P.bg, bd=0,
                                        highlightthickness=0, cursor="arrow")
@@ -1144,14 +1143,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return P.fg, P.fg_dim
         return P.fg_dim, P.fg_faint
 
-    def paint_tabs_image(self, pill=None, fade=1.0):
+    def paint_tabs_image(self, pill=None):
         """图片/渐变皮肤下, 整条页签用 PIL 画进底图
 
         Tk 的 create_text 在色键背景上抗锯齿只能跟色键混色, 压在图上就是
         一圈毛边(空心字); 列表行也是同样处理的, 这里照搬。
 
         :param pill: 药丸的位置(左, 右), 不传就用当前记录的
-        :param fade: 整体不透明度 0~1, 收起动画里用来淡出
         :return: 画成功没有
         """
         canvas = getattr(self, "tab_indicator", None)
@@ -1163,7 +1161,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         rect = pill or self._tab_pill
         if rect is None:
             return False
-        self._tabs_fade = fade
         try:
             width = int(max(item[1] for item in rects.values())) + 10
             height = 36
@@ -1208,7 +1205,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                                      self.tab_accent(self.tab), ratio)
             draw_pill(rect[0], rect[1], active_color)
             layer = layer.resize((width, height), Image.LANCZOS)
-            painter = ImageDraw.Draw(layer)
+            image = Image.alpha_composite(backdrop.convert("RGBA"),
+                                          layer).convert("RGB")
+            painter = ImageDraw.Draw(image)
 
             def baseline_of(tk_font, bold):
                 """把字在药丸高度上垂直居中时, 基线在哪
@@ -1235,13 +1234,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 self.list_paint_text(painter, item[3], count_base,
                                      str(self.tab_counts.get(key, 0)),
                                      self.f_tab_count, False, count_fg)
-            if fade < 1.0:
-                # 整层按比例压 alpha, 药丸和文字一起淡
-                alpha_band = layer.split()[3].point(
-                    lambda value: int(value * fade))
-                layer.putalpha(alpha_band)
-            image = Image.alpha_composite(backdrop.convert("RGBA"),
-                                          layer).convert("RGB")
             photo = ImageTk.PhotoImage(image)
             self._tab_photo = photo
             canvas.delete("tabpaint")
@@ -1463,29 +1455,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             canvas._circle_photo = photo
         return photo
 
-    def update_tabs_fade(self, height, low=None):
-        """收起动画里让页签行提前淡出
-
-        页签行离顶栏最近, 一直留着的话它就是最后才被窗口边缘切掉的一行,
-        看着很突兀; 高度快压到它的时候开始淡出就自然多了。
-
-        :param height: 当前可见高度
-        :param low: 收起到位时的高度, 到这个高度正好完全透明
-        """
-        if not self.list_paint_active():
-            return
-        bottom = 42 + 36
-        ground = 42 if low is None else max(2, int(low))
-        if height >= bottom:
-            fade = 1.0
-        elif height <= ground:
-            fade = 0.0
-        else:
-            fade = (height - ground) / float(max(1, bottom - ground))
-        if abs(fade - self._tabs_fade) < 0.03:
-            return
-        self.paint_tabs_image(self._tab_pill, fade)
-
     def update_tabs(self, done, total):
         """刷新两个页签上的数量
 
@@ -1559,6 +1528,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.btn_fold.config(text="\u25be")
             # 收起后不看统计, 先把这一行去掉, 横条才缩得窄
             self.stat_box.pack_forget()
+            # 页签行也一起收掉: 不然它是最后才被窗口边缘切掉的一行, 很突兀;
+            # 收掉后让下面的列表顶上来, 收起过程就只有"拉窗帘"了
+            self._tabbar.pack_forget()
+            self.root.update_idletasks()
             target_w, target_h = self.folded_width(), folded_h
             self._folded_size = (target_w, target_h)
             # 收起成横条时没有页签行, 箭头也藏起来
@@ -1702,7 +1675,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.round_window(width, height)
             self.clip_skin(width, height)
             self.paint_skin_frame(width, height)
-            self.update_tabs_fade(height, target_h)
             if state["step"] < steps:
                 self._fold_job = self.root.after(16, tick)
                 return
@@ -1745,9 +1717,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             done()
 
         self._animating = True
-        # 上一次收起可能把页签淡到透明了, 展开前恢复
-        self._tabs_fade = 1.0
-        self.redraw_tabs()
         # 先把可见区域压回横条大小, 再从这一帧开始放
         self.round_window(max(1, start_w), max(1, start_h))
         tick()

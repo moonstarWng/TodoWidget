@@ -244,8 +244,10 @@ def run_selftest():
     # 动画第一帧窗口还是展开尺寸, 这时必须还有区域在裁, 否则会闪一帧展开图
     first_frame_ok = (not app._skin_layered
                       or window_region(app.skin_win) != 0)
+    tabbar_gone = not app._tabbar.winfo_ismapped()
     settle_anim()
     check("收起第一帧不会闪展开图", first_frame_ok)
+    check("收起时页签行立刻收起", tabbar_gone)
     folded_w = root.winfo_width()
     stat_hidden = not app.stat_box.winfo_manager()
     folded_surface = tuple(app._skin_surface or ())
@@ -274,8 +276,6 @@ def run_selftest():
                          or expanded_surface == (root.winfo_width(),
                                                  root.winfo_height()))
     check("展开后里层图层跟着放大", expanded_layer_ok)
-    if app.list_paint_active():
-        check("展开后页签恢复不透明", app._tabs_fade >= 0.99)
     # 统计文字按可用宽度自动显示 / 隐藏(窗口有最小宽度, 直接按宽度算)
     app.fit_width(330)
     wide_shown = bool(app.stat_box.winfo_manager())
