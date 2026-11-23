@@ -269,11 +269,25 @@ def run_selftest():
     check("收起后不显示统计文字", stat_hidden)
     check("收起后标题固定为待办清单",
           app.lbl_title.cget("text") == "待办清单")
+    # 展开时先把显示区域收成横条再撑窗口, 否则撑大的那一帧整窗会露出来
+    spy_regions = []
+    real_geometry = root.geometry
+
+    def spy_geometry(spec=None):
+        if spec:
+            spy_regions.append(window_region(app.root))
+        return real_geometry(spec)
+
+    root.geometry = spy_geometry
     app.set_folded(False)
+    root.geometry = real_geometry
     # 展开那一刻磨砂膜就得算得出来, 不然会先闪一帧"没有膜"的底色
     scrim_ok = (app.scrim_mode != "frost" or app.skin_spec() is None
                 or app.skin_scrim_rect() is not None)
+    shrink_ok = (not app._skin_layered
+                 or (bool(spy_regions) and spy_regions[0] != 0))
     settle_anim()
+    check("展开前先按横条收住区域", shrink_ok)
     check("展开时磨砂膜马上就在", scrim_ok)
     # 动画中不允许按窗口大小重设区域(展开时窗口已是最终大小, 一设就把
     # 整个大窗口放出来, 闪一帧黑窗)

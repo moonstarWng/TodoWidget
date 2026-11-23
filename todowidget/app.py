@@ -1547,6 +1547,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.update_list_switch()
             self.btn_fold.config(text="\u25b4")
             target_w, target_h = self._expanded_size or (330, 460)
+            if animate:
+                # 窗口马上要撑到最终大小, 显示区域得先按横条收住: 不然撑大
+                # 的那一瞬还没裁, 整个大窗口会露出来一帧(皮肤还没跟上, 看着
+                # 就是一块黑的)
+                self.round_window(max(1, start_w), max(1, start_h),
+                                  force=True)
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
             self.root.geometry("{}x{}".format(target_w, target_h))
             # 先把布局排好: 磨砂膜的矩形是按页签/列表的实际位置算的,
@@ -3454,13 +3460,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         except Exception:
             return False
 
-    def round_window(self, width=None, height=None):
+    def round_window(self, width=None, height=None, force=False):
         """无边框 + 圆角, 看着像个小组件
 
         动画过程中传当前帧的尺寸进来, 免得 winfo_width 还是上一帧的旧值。
 
         :param width: 这一帧的宽, 不传就按窗口当前的
         :param height: 这一帧的高
+        :param force: True 时不管是不是 alpha 模式, 都切一个区域出来
         """
         if self._animating and width is None and height is None:
             # 展开动画里窗口已经是最终大小了, 这时按窗口尺寸设区域会把
@@ -3474,7 +3481,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if not hwnd:
                 return
             actual = (self.root.winfo_width(), self.root.winfo_height())
-            if (self._skin_layered and not self._animating
+            if (not force and self._skin_layered and not self._animating
                     and actual == size):
                 # 外圈圆角交给下面那层皮肤窗口的 alpha, 主窗口保持方角。
                 # 尺寸还没到位时同样不能清, 不然会闪一帧方窗
