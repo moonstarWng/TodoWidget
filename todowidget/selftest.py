@@ -10,6 +10,22 @@ from .paths import APP_DIR, CONF_FILE
 from .store import Store, new_item
 from .utils import FakeEvent, TkApp
 
+
+def window_region(widget):
+    """窗口现在设了裁剪区域没有(0 = 没有)
+
+    :param widget: 任意 Tk 窗口
+    """
+    import ctypes
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    user32.GetParent.restype = ctypes.c_void_p
+    hwnd = user32.GetParent(widget.winfo_id())
+    handle = gdi32.CreateRectRgn(0, 0, 1, 1)
+    kind = user32.GetWindowRgn(hwnd, handle)
+    gdi32.DeleteObject(handle)
+    return kind
+
 def run_selftest():
     """自检: 直接调用界面里公开的处理链, 不碰真实鼠标键盘
 
@@ -192,13 +208,26 @@ def run_selftest():
     # 收起成窄横条: 宽度按顶栏内容算, 统计文字不再显示
     before_w = root.winfo_width()
     app.set_folded(True)
+    # 动画第一帧窗口还是展开尺寸, 这时必须还有区域在裁, 否则会闪一帧展开图
+    first_frame_ok = (not app._skin_layered
+                      or window_region(app.skin_win) != 0)
     settle_anim()
+    check("收起第一帧不会闪展开图", first_frame_ok)
     folded_w = root.winfo_width()
     stat_hidden = not app.stat_box.winfo_manager()
     folded_surface = tuple(app._skin_surface or ())
     folded_layer_ok = (not app._skin_layered
                        or folded_surface == (folded_w, root.winfo_height()))
     check("收起后里层图层缩到横条大小", folded_layer_ok)
+    surface_image = app._skin_surface_image
+    border_ok = True
+    if app.border_active() and surface_image is not None:
+        sw, sh = surface_image.size
+        middle = surface_image.getpixel((sw // 2, sh // 2))
+        right = surface_image.getpixel((sw - 2, sh // 2))
+        bottom = surface_image.getpixel((sw // 2, sh - 2))
+        border_ok = right != middle and bottom != middle
+    check("收起后右边/下边也画了边框", border_ok)
     check("收起后横条变窄", folded_w < before_w and folded_w <= 220)
     check("收起后不显示统计文字", stat_hidden)
     check("收起后标题固定为待办清单",

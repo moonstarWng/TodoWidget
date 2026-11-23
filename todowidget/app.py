@@ -157,6 +157,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._skin_click = None
         self._skin_layered = False
         self._skin_surface = None
+        self._skin_surface_image = None
         self._skin_mask_cache = {}
         self._folded_size = None
         self._skin_source = None
@@ -1546,8 +1547,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
-            # 动画期间的区域是 1 位的, 收尾后换回 alpha 的圆角
-            self.drop_skin_regions()
             done()
 
         self._animating = True
@@ -1582,8 +1581,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
-            # 动画期间的区域是 1 位的, 收尾后换回 alpha 的圆角
-            self.drop_skin_regions()
             done()
 
         self._animating = True
@@ -1617,7 +1614,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.root.minsize(140, 42 + 2 * self._frame_pad)
         self.apply_resize_state()
         self.round_window(width, height)
-        if width and height:
+        if width and height and not self._skin_layered:
             self.paint_skin_frame(width, height)
         self.sync_skin(width, height)
 
@@ -2028,6 +2025,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.skin_label = label
             self._skin_layered = False
             self._skin_surface = None
+            self._skin_surface_image = None
             self._skin_mask_cache = {}
             self._skin_size = None
             self._skin_geom = None
@@ -2061,15 +2059,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         收起后皮肤图还是展开时那张(原来靠区域裁出横条), 换成 alpha 以后
         必须用裁过的图, 不然窗口里只剩左上角那个圆角。
         """
-        if not self._skin_layered or self._skin_image is None:
+        if not self._skin_layered or self._skin_plain is None:
             return
         try:
-            image = self._skin_image
             width = max(2, int(width or self.root.winfo_width()))
             height = max(2, int(height or self.root.winfo_height()))
+            image = self._skin_plain
             if image.size != (width, height):
                 image = image.crop((0, 0, min(width, image.width),
                                     min(height, image.height)))
+            if self.border_active():
+                # 边框要按新的一圈重画, 直接裁展开图会把右/下边裁掉
+                image = self.apply_border(image, (0, 0, width, height))
             self.push_layered_skin(image)
         except Exception as exc:
             print("refresh layered failed:", exc)
@@ -2343,13 +2344,37 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         except Exception:
             pass
 
+    def paint_bars(self, image):
+        """把顶栏/底栏单独上的颜色画进底图
+
+        这样外圈圆角能完全交给 alpha; 否则顶栏是实色的, 方角会戳出圆角,
+        只能退回 1 位的窗口区域, 圆角又有台阶。
+
+        :param image: 要画的图(RGB)
+        """
+        if not (self.header_split or self.footer_split):
+            return image
+        from PIL import ImageDraw
+        pad = self.border_pad()
+        width, height = image.size
+        draw = ImageDraw.Draw(image)
+        if self.header_split:
+            draw.rectangle([pad, pad, width - 1 - pad, pad + 39],
+                           fill=hex_to_rgb(self.header_color))
+        if self.footer_split:
+            draw.rectangle([pad, height - pad - 32, width - 1 - pad,
+                            height - 1 - pad],
+                           fill=hex_to_rgb(self.footer_color))
+        return image
+
     def compose_skin(self, base):
-        """由"底图 + 膜"合成最终皮肤图: 列表自绘 + 边框
+        """由"底图 + 膜"合成最终皮肤图: 列表自绘 + 顶底栏 + 边框
 
         :param base: 已经处理好底图和膜的那张图(RGB)
         """
         image = base.copy()
         image = self.list_paint_draw(image)
+        image = self.paint_bars(image)
         self._skin_plain = image.copy()
         rect = None
         if self.collapsed and self._folded_size:
@@ -2459,6 +2484,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if not ok:
                 return False
             self._skin_surface = (width, height)
+            self._skin_surface_image = image
             if not self._skin_layered:
                 self._skin_layered = True
                 # 之前设过 1 位的圆角区域, 会让边还是台阶, 等这一轮忙完清掉
@@ -2672,19 +2698,19 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             pass
 
     def header_bg(self):
-        """顶栏底色: 单独上色用它, 皮肤模式透明, 纯色主题用主题顶栏色"""
-        if self.header_split:
-            return self.header_color
+        """顶栏底色: 皮肤模式下透明(颜色画在底图上), 纯色主题用顶栏色"""
         if self.skin_spec() is not None:
             return self.blank_bg()
+        if self.header_split:
+            return self.header_color
         return P.head
 
     def footer_bg(self):
-        """底栏底色"""
-        if self.footer_split:
-            return self.footer_color
+        """底栏底色: 皮肤模式下透明(颜色画在底图上)"""
         if self.skin_spec() is not None:
             return self.blank_bg()
+        if self.footer_split:
+            return self.footer_color
         return P.bg
 
     def repaint_area(self, widget, color):
@@ -3047,7 +3073,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     # 先把底图裁成新尺寸, 再把窗口撑大, 中间不会露出空白
                     self.reload_skin_image(size[0], size[1], force=True)
             # 区域要先裁、位置要后挪: 反过来的话 SetWindowRgn 会把刚挪好的位置作废
-            if clip and self._skin_region_size != size:
+            if clip:
                 self.clip_skin(width, height)
             if x is None:
                 x = root.winfo_rootx()
@@ -3194,8 +3220,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         :param width: 可见宽度
         :param height: 可见高度
         """
+        size = (max(2, int(width)), max(2, int(height)))
+        actual = (self.root.winfo_width(), self.root.winfo_height())
+        if self._skin_layered and not self._animating and actual == size:
+            # 窗口已经缩到位了: 圆角交给 alpha, 把区域清掉(只清一次)
+            if self._skin_region_size != "alpha":
+                if self.skin_round(width, height):
+                    self._skin_region_size = "alpha"
+            return
+        if self._skin_region_size == size:
+            return
         if self.skin_round(width, height):
-            self._skin_region_size = (max(2, int(width)), max(2, int(height)))
+            self._skin_region_size = size
 
     def skin_round(self, width, height):
         """皮肤窗口也切圆角, 免得从主窗口四角露出来
@@ -3218,8 +3254,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return False
             w = max(2, int(width))
             h = max(2, int(height))
-            if self._skin_layered and not self._animating:
-                # 圆角已经在 alpha 里了, 再切区域反而把抗锯齿的边切掉
+            actual = (self.root.winfo_width(), self.root.winfo_height())
+            if (self._skin_layered and not self._animating
+                    and actual == (w, h)):
+                # 圆角已经在 alpha 里了, 再切区域反而把抗锯齿的边切掉。
+                # 但窗口还没缩到位时不能清, 否则会露出整张展开图
                 user32.SetWindowRgn(wrapper, None, True)
                 return True
             radius = self.corner_radius() * 2
@@ -3238,19 +3277,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             w = max(2, int(width or self.root.winfo_width()))
             h = max(2, int(height or self.root.winfo_height()))
             size = (w, h)
-            # 大小没变就别再设一遍区域, 每次 SetWindowRgn 都会让窗口重画
-            if self._main_region_size == size:
-                return
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             if not hwnd:
                 return
-            flat_bars = not self.header_split and not self.footer_split
-            if self._skin_layered and not self._animating and flat_bars:
+            actual = (self.root.winfo_width(), self.root.winfo_height())
+            if (self._skin_layered and not self._animating
+                    and actual == size):
                 # 外圈圆角交给下面那层皮肤窗口的 alpha, 主窗口保持方角。
-                # 顶栏/底栏单独上了色的话它们是实色的, 方角会戳出圆角,
-                # 这种情况还是老老实实切区域
-                if ctypes.windll.user32.SetWindowRgn(hwnd, None, True):
-                    self._main_region_size = size
+                # 尺寸还没到位时同样不能清, 不然会闪一帧方窗
+                if self._main_region_size != "alpha":
+                    if ctypes.windll.user32.SetWindowRgn(hwnd, None, True):
+                        self._main_region_size = "alpha"
+                return
+            # 大小没变就别再设一遍区域, 每次 SetWindowRgn 都会让窗口重画
+            if self._main_region_size == size:
                 return
             radius = self.corner_radius() * 2
             rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
