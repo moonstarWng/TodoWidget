@@ -75,7 +75,11 @@ def run_selftest():
         settle_anim()
     settle(8)
 
-    # 不写死任务名, 直接取两条未完成的子任务和第一个分组
+    # 皮肤模式下页签文字要画进图里(Tk 文本压在图上会一圈毛边/空心)
+    tab_kinds = [app.tab_indicator.type(item)
+                 for item in app.tab_indicator.find_all()]
+    check("页签文字在皮肤下走自绘",
+          (not app.list_paint_active()) or ("text" not in tab_kinds))
     first_leaf = None
     second_leaf = None
     first_group = None

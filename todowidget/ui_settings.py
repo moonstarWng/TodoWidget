@@ -1177,35 +1177,9 @@ class SettingsMixin:
             """背景变了: 自动色的小样跟着更新"""
             fg_swatch.configure(bg=state["fg"] or suggest_fg())
 
-        color_box = section(page_color, "文字与强调色",
-                            "改完看左边的小样")
-        fg_row = row(color_box, "文字色")
-        fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(auto_bg()),
-                             width=36, height=22, highlightthickness=1,
-                             highlightbackground=P.border)
-        fg_swatch.pack(side="left")
-        fg_swatch.pack_propagate(False)
-        fg_btn = tk.Label(fg_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
-                          font=self.f_small, padx=10, pady=2, cursor="hand2")
-        fg_btn.pack(side="left", padx=8)
-        fg_btn.bind("<Button-1>", lambda ev: pick_fg())
-        fg_auto_btn = tk.Label(fg_row, text="自动", bg=P.bg, fg=P.fg_faint,
-                               font=self.f_small, padx=6, pady=2, cursor="hand2")
-        fg_auto_btn.pack(side="left")
-        fg_auto_btn.bind("<Button-1>", lambda ev: reset_fg())
-        fg_suggest = tk.Label(fg_row, text="自动推荐", bg=P.bg, fg=P.fg_faint,
-                              font=self.f_small, padx=6, pady=2,
-                              cursor="hand2")
-        fg_suggest.pack(side="left")
-        fg_suggest.bind("<Button-1>", lambda ev: apply_fg(suggest_fg()))
-        fg_suggest.bind("<Enter>",
-                        lambda ev, w=fg_suggest: w.configure(fg=P.fg))
-        fg_suggest.bind("<Leave>",
-                        lambda ev, w=fg_suggest: w.configure(fg=P.fg_faint))
-        dropper(fg_row, lambda c: apply_fg(c))
-        fg_row.pack(fill="x")
-
-        accent_row = row(color_box, "强调色")
+        accent_box = section(page_color, "强调色",
+                             "勾选框、进度条、选中项跟着它变")
+        accent_row = row(accent_box, "颜色")
         accent_swatch = tk.Frame(accent_row, bg=state["accent"], width=36,
                                  height=22, highlightthickness=1,
                                  highlightbackground=P.border)
@@ -1329,6 +1303,34 @@ class SettingsMixin:
             combo.pack(side="left", fill="x", expand=True)
             combo.bind("<<ComboboxSelected>>",
                        lambda ev, k=key, b=combo: set_font(k, b))
+
+        fg_box = section(page_font, "文字颜色",
+                         "选完背景点「自动推荐」，按底色配一个")
+        fg_row = row(fg_box, "文字色")
+        fg_swatch = tk.Frame(fg_row, bg=state["fg"] or auto_text_color(auto_bg()),
+                             width=36, height=22, highlightthickness=1,
+                             highlightbackground=P.border)
+        fg_swatch.pack(side="left")
+        fg_swatch.pack_propagate(False)
+        fg_btn = tk.Label(fg_row, text="选择…", bg=P.bg_alt, fg=P.fg_dim,
+                          font=self.f_small, padx=10, pady=2, cursor="hand2")
+        fg_btn.pack(side="left", padx=8)
+        fg_btn.bind("<Button-1>", lambda ev: pick_fg())
+        fg_auto_btn = tk.Label(fg_row, text="自动", bg=P.bg, fg=P.fg_faint,
+                               font=self.f_small, padx=6, pady=2, cursor="hand2")
+        fg_auto_btn.pack(side="left")
+        fg_auto_btn.bind("<Button-1>", lambda ev: reset_fg())
+        fg_suggest = tk.Label(fg_row, text="自动推荐", bg=P.bg, fg=P.fg_faint,
+                              font=self.f_small, padx=6, pady=2,
+                              cursor="hand2")
+        fg_suggest.pack(side="left")
+        fg_suggest.bind("<Button-1>", lambda ev: apply_fg(suggest_fg()))
+        fg_suggest.bind("<Enter>",
+                        lambda ev, w=fg_suggest: w.configure(fg=P.fg))
+        fg_suggest.bind("<Leave>",
+                        lambda ev, w=fg_suggest: w.configure(fg=P.fg_faint))
+        dropper(fg_row, lambda c: apply_fg(c))
+        fg_row.pack(fill="x")
 
         def set_font(key, box):
             """下拉选完字体: 存进草稿并刷新小样

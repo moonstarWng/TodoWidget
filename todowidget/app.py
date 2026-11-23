@@ -1130,8 +1130,123 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         except Exception:
             pass
 
+    def tab_text_colors(self, key):
+        """页签上名字和数量各用什么颜色
+
+        :param key: pending / done
+        """
+        active = (key == self.tab)
+        base = self.tab_accent(key)
+        if active:
+            return base, mix_color(base, self.blank_bg(), 0.30)
+        if key == self._tab_hover:
+            return P.fg, P.fg_dim
+        return P.fg_dim, P.fg_faint
+
+    def paint_tabs_image(self, pill=None):
+        """图片/渐变皮肤下, 整条页签用 PIL 画进底图
+
+        Tk 的 create_text 在色键背景上抗锯齿只能跟色键混色, 压在图上就是
+        一圈毛边(空心字); 列表行也是同样处理的, 这里照搬。
+
+        :param pill: 药丸的位置(左, 右), 不传就用当前记录的
+        :return: 画成功没有
+        """
+        canvas = getattr(self, "tab_indicator", None)
+        if canvas is None or Image is None or not self.list_paint_active():
+            return False
+        rects = self._tab_rects
+        if not rects:
+            return False
+        rect = pill or self._tab_pill
+        if rect is None:
+            return False
+        try:
+            width = int(max(item[1] for item in rects.values())) + 10
+            height = 36
+            base_x = canvas.winfo_rootx() - self.root.winfo_rootx()
+            base_y = canvas.winfo_rooty() - self.root.winfo_rooty()
+            backdrop = self.chrome_backdrop(base_x, base_y, width, height)
+            if backdrop is None:
+                return False
+            width = backdrop.width
+            height = backdrop.height
+            over = 3
+            layer = Image.new("RGBA", (width * over, height * over),
+                              (0, 0, 0, 0))
+            painter = ImageDraw.Draw(layer)
+
+            def draw_pill(x0, x1, color):
+                """上圆下平的药丸
+
+                :param x0: 左
+                :param x1: 右
+                :param color: 填充色
+                """
+                top = 6 * over
+                bottom = 34 * over
+                radius = 8 * over
+                left = x0 * over
+                right = x1 * over - 1
+                painter.rounded_rectangle(
+                    [left, top, right, top + 2 * radius],
+                    radius=radius, fill=color)
+                painter.rectangle(
+                    [left, top + radius, right, bottom], fill=color)
+
+            hover = self._tab_hover
+            if hover and hover != self.tab:
+                hover_rect = rects.get(hover)
+                if hover_rect:
+                    draw_pill(hover_rect[0], hover_rect[1],
+                              mix_color(self.blank_bg(), P.fg, 0.08))
+            ratio = 0.28 if self._tab_hover == self.tab else 0.20
+            active_color = mix_color(self.blank_bg(),
+                                     self.tab_accent(self.tab), ratio)
+            draw_pill(rect[0], rect[1], active_color)
+            layer = layer.resize((width, height), Image.LANCZOS)
+            image = Image.alpha_composite(backdrop.convert("RGBA"),
+                                          layer).convert("RGB")
+            painter = ImageDraw.Draw(image)
+
+            def baseline_of(tk_font, bold):
+                """把字在药丸高度上垂直居中时, 基线在哪
+
+                :param tk_font: Tk 字体
+                :param bold: 是否粗体
+                """
+                font = self.list_paint_kind_font("cn", tk_font, bold)
+                if font is None:
+                    return 26
+                ascent, descent = font.getmetrics()
+                return 20 + (ascent - descent) // 2
+
+            baseline = baseline_of(self.f_tab, True)
+            count_base = baseline_of(self.f_tab_count, False)
+            for key, name in (("pending", "\u672a\u5b8c\u6210"),
+                              ("done", "\u5df2\u5b8c\u6210")):
+                item = rects.get(key)
+                if not item:
+                    continue
+                name_fg, count_fg = self.tab_text_colors(key)
+                self.list_paint_text(painter, item[2], baseline, name,
+                                     self.f_tab, True, name_fg)
+                self.list_paint_text(painter, item[3], count_base,
+                                     str(self.tab_counts.get(key, 0)),
+                                     self.f_tab_count, False, count_fg)
+            photo = ImageTk.PhotoImage(image)
+            self._tab_photo = photo
+            canvas.delete("tabpaint")
+            canvas.create_image(0, 0, anchor="nw", image=photo,
+                                tags="tabpaint")
+            canvas.tag_lower("tabpaint")
+            return True
+        except Exception as exc:
+            print("tabs paint failed:", exc)
+            return False
+
     def paint_tab_texts(self):
-        """重画两个页签上的文字(名字 + 数量)"""
+        """重画两个页签上的文字(名字 + 数量, 纯色主题走这条路)"""
         canvas = getattr(self, "tab_indicator", None)
         if canvas is None:
             return
@@ -1142,17 +1257,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 rect = self._tab_rects.get(key)
                 if not rect:
                     continue
-                active = (key == self.tab)
-                base = self.tab_accent(key)
-                if active:
-                    name_fg = base
-                    count_fg = mix_color(base, self.blank_bg(), 0.30)
-                elif key == self._tab_hover:
-                    name_fg = P.fg
-                    count_fg = P.fg_dim
-                else:
-                    name_fg = P.fg_dim
-                    count_fg = P.fg_faint
+                name_fg, count_fg = self.tab_text_colors(key)
                 canvas.create_text(rect[2], 20, text=name, anchor="w",
                                    font=self.f_tab, fill=name_fg,
                                    tags=("tabtext", key))
@@ -1185,11 +1290,33 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             canvas.delete("all")
         except Exception:
             return
+        if self.paint_tabs_image(previous if changed and previous else pill):
+            if changed and previous:
+                self.slide_tabs_image(previous, pill)
+            return
         self.paint_tab_hover()
         self.paint_tab_pill(previous if changed and previous else pill)
         self.paint_tab_texts()
         if changed and previous:
             self.slide_tab_pill(previous, pill)
+
+    def slide_tabs_image(self, start, target):
+        """自绘模式下药丸滑过去(每帧重画整条, 文字才不会跟药丸错开)
+
+        :param start: 起点 (左, 右)
+        :param target: 终点 (左, 右)
+        """
+        tween = getattr(self, "_tab_tween", None)
+        if tween is not None:
+            tween.stop()
+        self._tab_tween = Tween(
+            self.root, 0.18,
+            on_frame=lambda p: self.paint_tabs_image((
+                start[0] + (target[0] - start[0]) * p,
+                start[1] + (target[1] - start[1]) * p)),
+            on_done=lambda: setattr(self, "_tab_tween", None),
+            easing=ease_in_out_cubic)
+        self._tab_tween.start()
 
     def slide_tab_pill(self, start, target):
         """药丸从旧页签滑到新页签
@@ -1243,6 +1370,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if key == self._tab_hover:
             return
         self._tab_hover = key
+        if self.paint_tabs_image(self._tab_pill):
+            return
         self.paint_tab_pill(self._tab_pill)
         self.paint_tab_hover()
         self.paint_tab_texts()
@@ -2507,6 +2636,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         except Exception:
             pass
         self.push_layered_skin(image)
+        # 底图换了, 页签是自绘的, 得跟着重画(不然字和底对不上)
+        self.root.after_idle(self.redraw_tabs)
 
     def stretch_skin_image(self, width, height):
         """拖动改大小时先用上一张底图拉伸顶上, 松手再正经裁一次
