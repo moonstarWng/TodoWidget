@@ -2363,21 +2363,35 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             user32 = ctypes.windll.user32
             no_zorder = 0x0004
             no_activate = 0x0010
-            no_redraw = 0x0008
             main = self.main_hwnd()
-            user32.SetWindowPos(main, 0, x, y, width, height,
-                                no_zorder | no_activate | no_redraw)
             skin = self.skin_hwnd()
-            if skin:
-                # 已经紧挨在主窗口下面时只挪位置, 不动 z 序:
-                # 每帧重排一次顶层窗口会让两边都重画, 拖起来就是闪
-                if user32.GetWindow(skin, 3) == main:
-                    user32.SetWindowPos(skin, 0, x, y, width, height,
-                                        no_zorder | no_activate | no_redraw)
-                else:
+            # 两个窗口放进同一个"窗口位置事务"里一起提交:
+            # 分两次 SetWindowPos 时, 中间那一帧会出现"主窗口已经挪走、
+            # 皮肤还没跟上"的空洞, 看着就是闪
+            batch = user32.BeginDeferWindowPos(2)
+            if batch:
+                batch = user32.DeferWindowPos(batch, main, 0, x, y,
+                                              width, height,
+                                              no_zorder | no_activate)
+                if skin:
+                    if user32.GetWindow(skin, 3) == main:
+                        after = 0
+                        flags = no_zorder | no_activate
+                    else:
+                        after = main
+                        flags = no_activate
+                    batch = user32.DeferWindowPos(batch, skin, after, x, y,
+                                                  width, height, flags)
+                user32.EndDeferWindowPos(batch)
+                if skin:
+                    self._skin_geom = (width, height, x, y)
+            else:
+                user32.SetWindowPos(main, 0, x, y, width, height,
+                                    no_zorder | no_activate)
+                if skin:
                     user32.SetWindowPos(skin, main, x, y, width, height,
-                                        no_activate | no_redraw)
-                self._skin_geom = (width, height, x, y)
+                                        no_activate)
+                    self._skin_geom = (width, height, x, y)
         except Exception:
             pass
 

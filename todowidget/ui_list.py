@@ -480,42 +480,51 @@ class ListViewMixin:
         return parent, idx + 1, iid, "after"
 
     def update_hint(self, y):
+        """拖动时更新"会插到哪儿"的提示线和落点高亮
+
+        :param y: 鼠标在列表里的纵坐标
+        """
         parent, index, tgt, mode = self.drop_target(y)
         src = self._drag_src
-        ok = True
         if tgt and (tgt == src or self.is_ancestor(src, tgt)):
-            ok = False
-        if not ok:
             self.hide_hint()
             self._drop = None
             return
         self._drop = (parent, index, tgt, mode)
-        self.clear_marks()
+        width_inside = max(40, self.tree.winfo_width() - 8)
+        box = None
         if mode == "inside":
             bbox = self.tree.bbox(tgt)
             if bbox:
                 self.mark_row(tgt)
-                self.hint.place(x=bbox[0] + 2, y=bbox[1] + bbox[3] - 3,
-                                width=max(40, self.tree.winfo_width() - 8),
-                                height=2)
-                self.hint.lift()
+                box = (bbox[0] + 2, bbox[1] + bbox[3] - 3, width_inside, 2)
+        else:
+            self.clear_marks()
+            if mode == "end":
+                children = self.tree.get_children()
+                bbox = self.tree.bbox(children[-1]) if children else ""
+                if bbox:
+                    box = (4, bbox[1] + bbox[3],
+                           max(40, self.tree.winfo_width() - 10), 2)
+            else:
+                bbox = self.tree.bbox(tgt)
+                if bbox:
+                    yy = bbox[1] if mode == "before" else bbox[1] + bbox[3] - 1
+                    box = (bbox[0] + 2, yy, width_inside, 2)
+        if box is None:
             return
-        if mode == "end":
-            bbox = self.tree.bbox(self.tree.get_children()[-1])
-            if bbox:
-                yy = bbox[1] + bbox[3]
-                self.hint.place(x=4, y=yy, width=max(40, self.tree.winfo_width() - 10),
-                                height=2)
-                self.hint.lift()
+        if box == getattr(self, "_hint_pos", None):
+            # 落点和上一帧一样: 什么都不用做, 重放提示线会让底下的行重画
             return
-        bbox = self.tree.bbox(tgt)
-        if bbox:
-            yy = bbox[1] if mode == "before" else bbox[1] + bbox[3] - 1
-            self.hint.place(x=bbox[0] + 2, y=yy,
-                            width=max(40, self.tree.winfo_width() - 8), height=2)
-            self.hint.lift()
+        self._hint_pos = box
+        self.hint.place(x=box[0], y=box[1], width=box[2], height=box[3])
+        self.hint.lift()
 
     def mark_row(self, iid):
+        if iid == getattr(self, "_marked", None) and self.tree.exists(iid):
+            # 还停在同一行: 别重复改 tag, 每改一次整行都要重画
+            return
+        self.clear_marks()
         self._marked = iid
         self.tree.item(iid, tags=("drop_" + self.base_tag(iid),))
         self.list_paint_later()
@@ -528,6 +537,7 @@ class ListViewMixin:
         self.list_paint_later()
 
     def hide_hint(self):
+        self._hint_pos = None
         try:
             self.hint.place_forget()
         except Exception:
