@@ -184,6 +184,7 @@ class ListViewMixin:
             self.pbar.place_configure(relwidth=(done / total) if total else 0)
         except Exception:
             pass
+        self.update_list_switch()
         self.list_paint_later()
         self.root.after_idle(self.sync_scroll)
 

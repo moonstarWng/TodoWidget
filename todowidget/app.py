@@ -470,6 +470,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.tab_labels[key] = lbl
             self.tab_bars[key] = bar
 
+        # 清单切换按钮: 静置只有符号, 悬停变亮; 清单少于两个时藏起来
+        self.btn_next_list = tk.Label(tabbar, text=">", bg=P.bg, fg=P.fg_faint,
+                                      font=self.f_group, padx=6, pady=0,
+                                      cursor="hand2")
+        self.btn_prev_list = tk.Label(tabbar, text="<", bg=P.bg, fg=P.fg_faint,
+                                      font=self.f_group, padx=6, pady=0,
+                                      cursor="hand2")
+        for btn, step in ((self.btn_next_list, 1), (self.btn_prev_list, -1)):
+            btn.pack(side="right", padx=(0, 4), pady=(3, 0))
+            btn.bind("<Button-1>", lambda ev, s=step: self.cycle_list(s))
+            btn.bind("<Enter>",
+                     lambda ev, w=btn: self.hover_list_switch(w, True))
+            btn.bind("<Leave>",
+                     lambda ev, w=btn: self.hover_list_switch(w, False))
+
         def start_drag(e):
             self._drag_from = (e.x_root, e.y_root)
             self._drag = (e.x_root - r.winfo_x(), e.y_root - r.winfo_y())
@@ -900,6 +915,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.stat_box.pack_forget()
             target_w, target_h = self.folded_width(), folded_h
             self._folded_size = (target_w, target_h)
+            # 收起成横条时没有页签行, 箭头也藏起来
+            self.update_list_switch()
             # 下面的内容钉住不动, 跟着窗口边缘被裁掉
             if animate:
                 self.freeze_content()
@@ -907,6 +924,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         else:
             self.restore_layout()
             self._folded_size = None
+            self.update_list_switch()
             self.btn_fold.config(text="\u25b4")
             target_w, target_h = self._expanded_size or (330, 460)
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来

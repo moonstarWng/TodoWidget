@@ -63,6 +63,50 @@ class ListMenuMixin:
         finally:
             menu.grab_release()
 
+    def cycle_list(self, step):
+        """切到下一个 / 上一个清单(首尾循环)
+
+        :param step: 1 下一个, -1 上一个
+        """
+        lists = self.store.lists
+        if len(lists) < 2:
+            return
+        ids = [item.get("id") for item in lists]
+        try:
+            index = ids.index(self.store.current)
+        except ValueError:
+            index = 0
+        target = ids[(index + step) % len(ids)]
+        if target == self.store.current:
+            return
+        # 先起标题动画, 换清单时 update_title 会把新名字塞进去
+        self.fade_title()
+        self.switch_list(target)
+
+    def update_list_switch(self):
+        """清单数量 / 收起状态变了, 决定那两个箭头显不显示"""
+        buttons = (self.btn_next_list, self.btn_prev_list)
+        if not all(buttons):
+            return
+        show = len(self.store.lists) > 1 and not self.collapsed
+        for btn in buttons:
+            mapped = bool(btn.winfo_manager())
+            if show and not mapped:
+                btn.pack(side="right", padx=(0, 4), pady=(3, 0))
+            elif not show and mapped:
+                btn.pack_forget()
+
+    def hover_list_switch(self, widget, entering):
+        """切换箭头悬停时变亮
+
+        :param widget: 哪个箭头
+        :param entering: True 移入 / False 移出
+        """
+        try:
+            widget.configure(fg=P.fg if entering else P.fg_faint)
+        except Exception:
+            pass
+
     def switch_list(self, list_id):
         if list_id == self.store.current:
             return
