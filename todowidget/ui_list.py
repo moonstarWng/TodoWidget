@@ -427,10 +427,32 @@ class ListViewMixin:
                 return
             self._dragging = True
             self.clear_hover()
-        self.autoscroll(e.y)
-        self.update_hint(e.y)
+        # 高回报率鼠标一秒几百个事件, 提示线按帧更新就够了
+        self._hint_y = e.y
+        self.schedule_hint()
+
+    def schedule_hint(self):
+        """把"更新拖动提示"攒到下一帧做"""
+        if getattr(self, "_hint_job", None) is not None:
+            return
+        self._hint_job = self.root.after(12, self.run_hint)
+
+    def run_hint(self):
+        """定时器到点: 更新提示线和自动滚动"""
+        self._hint_job = None
+        y = getattr(self, "_hint_y", None)
+        if y is None or not self._dragging:
+            return
+        self.autoscroll(y)
+        self.update_hint(y)
 
     def on_release(self, e):
+        if getattr(self, "_hint_job", None) is not None:
+            try:
+                self.root.after_cancel(self._hint_job)
+            except Exception:
+                pass
+            self._hint_job = None
         dragging, src = self._dragging, self._drag_src
         box = getattr(self, "_press_box", None)
         pin = getattr(self, "_press_pin", None)
@@ -438,6 +460,7 @@ class ListViewMixin:
         self._dragging = False
         self._press_box = None
         self._press_pin = None
+        self._hint_y = None
         self.hide_hint()
         if dragging:
             if src:

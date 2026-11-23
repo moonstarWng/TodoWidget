@@ -342,6 +342,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._list_paint_job = None
         self._menu_open = False
         self._screen_key = ""
+        self._drag_target = None
+        self._drag_job = None
         self._main_region_size = None
         # 换主题后膜的浓度和底色都变了, 缓存作废
         self._scrim_cache = {}
@@ -470,24 +472,27 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._drag_moved = False
 
         def on_drag(e):
+            """鼠标动一下: 只记目标位置, 真正搬窗口由定时器按帧做
+
+            高回报率的鼠标一秒钟能发几百个 motion 事件, 每个都搬一次窗口
+            合成器跟不上, 看着就是闪。
+            """
             if not self._drag:
                 return
             move_x = abs(e.x_root - self._drag_from[0])
             move_y = abs(e.y_root - self._drag_from[1])
             if move_x > 3 or move_y > 3:
                 self._drag_moved = True
-            target_x = e.x_root - self._drag[0]
-            target_y = e.y_root - self._drag[1]
-            if self.skin_win is None:
-                # 纯色主题没有皮肤窗口, 直接挪主窗口
-                r.geometry("+{}+{}".format(target_x, target_y))
-            else:
-                self.sync_skin(x=target_x, y=target_y, instant=True)
+            self._drag_target = (e.x_root - self._drag[0],
+                                 e.y_root - self._drag[1])
+            self.apply_drag_move()
 
         def end_drag(e, as_click=False):
             moved = getattr(self, "_drag_moved", False)
+            self._drag_target = None
             self._drag = None
             self._drag_moved = False
+            self.cancel_drag_move()
             self.save_geom()
             if moved:
                 # 拖动期间是"不重画搬家", 松手补一次完整重画
@@ -2581,6 +2586,43 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                           variable=tk.BooleanVar(value=self.resize_locked))
         m.add_command(label="退出", command=self.quit)
         self.popup_menu(m, e.x_root, e.y_root)
+
+    def cancel_drag_move(self):
+        """松手: 取消还没执行的搬窗口任务, 并把最后位置补上"""
+        if self._drag_job is not None:
+            try:
+                self.root.after_cancel(self._drag_job)
+            except Exception:
+                pass
+            self._drag_job = None
+        target = getattr(self, "_drag_target", None)
+        if target:
+            x, y = target
+            if self.skin_win is None:
+                self.root.geometry("+{}+{}".format(int(x), int(y)))
+            else:
+                self.sync_skin(x=x, y=y, instant=True)
+
+    def apply_drag_move(self):
+        """按帧搬窗口: 同一帧里的多个 motion 只搬最后一次"""
+        target = getattr(self, "_drag_target", None)
+        if not target or not getattr(self, "_drag", None):
+            return
+        if self._drag_job is not None:
+            return
+        self._drag_job = self.root.after(12, self.run_drag_move)
+
+    def run_drag_move(self):
+        """定时器到点: 把窗口挪到最新的目标位置"""
+        self._drag_job = None
+        target = getattr(self, "_drag_target", None)
+        if not target or not getattr(self, "_drag", None):
+            return
+        x, y = target
+        if self.skin_win is None:
+            self.root.geometry("+{}+{}".format(int(x), int(y)))
+            return
+        self.sync_skin(x=x, y=y, instant=True)
 
     def reset_position(self):
         """把窗口夹回当前屏幕(换过显示器之后手边能救一下)"""
