@@ -68,7 +68,13 @@ class ListViewMixin:
             current = self.store.current_list()
             color = (current or {}).get("color") or P.accent
             self.list_dot.delete("all")
-            self.list_dot.create_oval(2, 2, 9, 9, fill=color, outline="")
+            photo = self.dot_photo(color, 10)
+            if photo is not None:
+                self.list_dot.create_image(5, 5, image=photo)
+                self._list_dot_photo = photo
+            else:
+                self.list_dot.create_oval(2, 2, 9, 9, fill=color,
+                                          outline="")
         except Exception:
             pass
         open_state = {}

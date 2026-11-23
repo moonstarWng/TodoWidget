@@ -14,16 +14,33 @@ from .theme import P, best_text_color, hex_to_rgb, mix_color
 from .utils import round_corners
 
 class ListMenuMixin:
-    def make_dot_image(self, color, size=10):
-        """菜单里清单前面那个彩色小圆点"""
+    def dot_photo(self, color, size=10):
+        """画一个抗锯齿的彩色小圆点
+
+        Tk 自己的 create_oval 是 GDI 画的, 没有抗锯齿, 小圆点放大看是方的;
+        这里用 PIL 画好再当图片贴上去。
+
+        :param color: 圆点颜色
+        :param size: 边长
+        """
         if Image is None:
             return None
         try:
-            image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-            draw = ImageDraw.Draw(image)
-            draw.ellipse([1, 1, size - 2, size - 2], fill=hex_to_rgb(color))
-            photo = ImageTk.PhotoImage(image)
+            scale = 4
+            big = Image.new("RGBA", (size * scale, size * scale),
+                            (0, 0, 0, 0))
+            draw = ImageDraw.Draw(big)
+            draw.ellipse([0, 0, size * scale - 1, size * scale - 1],
+                         fill=hex_to_rgb(color) + (255,))
+            image = big.resize((size, size), Image.LANCZOS)
+            return ImageTk.PhotoImage(image)
         except Exception:
+            return None
+
+    def make_dot_image(self, color, size=10):
+        """菜单里清单前面那个彩色小圆点"""
+        photo = self.dot_photo(color, size)
+        if photo is None:
             return None
         self._menu_dots.append(photo)
         return photo
@@ -290,8 +307,13 @@ class ListMenuMixin:
         dot = tk.Canvas(row, width=10, height=10, bg=P.bg_alt,
                         highlightthickness=0, bd=0)
         dot.pack(side="left", padx=(10, 6))
-        dot.create_oval(1, 1, 9, 9, fill=lst.get("color") or P.accent,
-                        outline="")
+        color = lst.get("color") or P.accent
+        photo = self.dot_photo(color, 10)
+        if photo is not None:
+            dot.create_image(5, 5, image=photo)
+            dot._photo = photo
+        else:
+            dot.create_oval(1, 1, 9, 9, fill=color, outline="")
         name = tk.Label(row, text=lst.get("name") or "未命名", bg=P.bg_alt,
                         fg=P.fg, font=self.f_item, anchor="w")
         name.pack(side="left")

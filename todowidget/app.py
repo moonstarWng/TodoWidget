@@ -470,6 +470,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._tab_pill = None
         self._tab_pill_key = None
         self._tab_tween = None
+        self._tab_retry_job = None
         self.tab_indicator = tk.Canvas(tabbar, bg=P.bg, bd=0,
                                        highlightthickness=0, cursor="arrow")
         self.tab_indicator.place(x=0, y=0, relwidth=1, relheight=1)
@@ -858,6 +859,96 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             x += width + gap
         return rects
 
+    def chrome_backdrop(self, x, y, width, height):
+        """取窗口里某块区域当前的底色, 用来给抗锯齿做底
+
+        图片皮肤时主窗口是透明的, 看到的是下面皮肤窗口那张底图,
+        所以直接把底图上对应的一小块裁出来; 纯色主题就是主题底色。
+        拿不到可靠的底色就返回 None, 调用方退回没有抗锯齿的画法。
+
+        :param x: 窗口坐标左
+        :param y: 窗口坐标上
+        :param width: 宽
+        :param height: 高
+        """
+        if Image is None:
+            return None
+        width = max(1, int(round(width)))
+        height = max(1, int(round(height)))
+        image = getattr(self, "_skin_image", None)
+        if image is not None:
+            try:
+                left = int(round(x))
+                top = int(round(y))
+                right = left + width
+                bottom = top + height
+                if (left >= 0 and top >= 0 and right <= image.width
+                        and bottom <= image.height):
+                    return image.crop(
+                        (left, top, right, bottom)).convert("RGB")
+            except Exception:
+                pass
+        if self.skin_spec() is None:
+            try:
+                return Image.new("RGB", (width, height), hex_to_rgb(P.bg))
+            except Exception:
+                return None
+        return None
+
+    def tab_pill_photo(self, width, height, x, y, fill, radius=8):
+        """把页签底色画成一张已经抗锯齿的图(上圆下平)
+
+        :param width: 宽
+        :param height: 高
+        :param x: 这块在窗口里的左边(取底色用)
+        :param y: 这块在窗口里的上边
+        :param fill: 填充色
+        :param radius: 上面的圆角半径
+        """
+        if Image is None:
+            return None
+        backdrop = self.chrome_backdrop(x, y, width, height)
+        if backdrop is None:
+            return None
+        scale = 4
+        mask = Image.new("L", (width * scale, height * scale), 0)
+        drawer = ImageDraw.Draw(mask)
+        drawer.rounded_rectangle(
+            [0, 0, width * scale - 1, 2 * radius * scale - 1],
+            radius=radius * scale, fill=255)
+        drawer.rectangle([0, radius * scale, width * scale - 1,
+                          height * scale - 1], fill=255)
+        mask = mask.resize((width, height), Image.LANCZOS)
+        tint = Image.new("RGB", (width, height), hex_to_rgb(fill))
+        return ImageTk.PhotoImage(Image.composite(tint, backdrop, mask))
+
+    def circle_photo(self, size, x, y, fill, ring=None):
+        """画一个抗锯齿的圆底(箭头按钮的悬停底)
+
+        :param size: 边长
+        :param x: 这块在窗口里的左边(取底色用)
+        :param y: 这块在窗口里的上边
+        :param fill: 填充色
+        :param ring: 描边色, 不传就不描
+        """
+        if Image is None:
+            return None
+        backdrop = self.chrome_backdrop(x, y, size, size)
+        if backdrop is None:
+            return None
+        scale = 4
+        layer = Image.new("RGBA", (size * scale, size * scale),
+                          (0, 0, 0, 0))
+        drawer = ImageDraw.Draw(layer)
+        box = [0, 0, size * scale - 1, size * scale - 1]
+        drawer.ellipse(box, fill=hex_to_rgb(fill) + (255,))
+        if ring:
+            drawer.ellipse(box, outline=hex_to_rgb(ring) + (255,),
+                           width=scale)
+        layer = layer.resize((size, size), Image.LANCZOS)
+        merged = Image.alpha_composite(backdrop.convert("RGBA"), layer)
+        return ImageTk.PhotoImage(merged.convert("RGB"))
+
     def tab_shape(self, canvas, x0, x1, y0, y1, fill, tag, radius=8):
         """页签底色: 上面两个角小圆, 下面两个角是直角
 
@@ -900,7 +991,23 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 ratio = 0.28 if self._tab_hover == self.tab else 0.20
                 color = mix_color(self.blank_bg(),
                                   self.tab_accent(self.tab), ratio)
-            self.tab_shape(canvas, rect[0], rect[1], 6, 34, color, "pill")
+            width = int(round(rect[1] - rect[0]))
+            photo = None
+            if width >= 6:
+                base_x = canvas.winfo_rootx() - self.root.winfo_rootx()
+                base_y = canvas.winfo_rooty() - self.root.winfo_rooty()
+                photo = self.tab_pill_photo(width, 28,
+                                            base_x + int(round(rect[0])),
+                                            base_y + 6, color)
+            if photo is not None:
+                self._tab_pill_photo = photo
+                canvas.create_image(int(round(rect[0])), 6, anchor="nw",
+                                    image=photo, tags="pill")
+            else:
+                self.tab_shape(canvas, rect[0], rect[1], 6, 34, color,
+                               "pill")
+                # 皮肤底图还没出来(刚启动 / 动画中), 等一会儿再画一次
+                self.schedule_tab_retry()
             canvas.tag_lower("pill")
         except Exception:
             pass
@@ -918,9 +1025,22 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             rect = self._tab_rects.get(key)
             if not rect:
                 return
-            self.tab_shape(canvas, rect[0], rect[1], 6, 34,
-                           mix_color(self.blank_bg(), P.fg, 0.08),
-                           "hoverpill")
+            fill = mix_color(self.blank_bg(), P.fg, 0.08)
+            width = int(round(rect[1] - rect[0]))
+            photo = None
+            if width >= 6:
+                base_x = canvas.winfo_rootx() - self.root.winfo_rootx()
+                base_y = canvas.winfo_rooty() - self.root.winfo_rooty()
+                photo = self.tab_pill_photo(
+                    width, 28, base_x + int(round(rect[0])), base_y + 6,
+                    fill)
+            if photo is not None:
+                self._tab_hover_photo = photo
+                canvas.create_image(int(round(rect[0])), 6, anchor="nw",
+                                    image=photo, tags="hoverpill")
+            else:
+                self.tab_shape(canvas, rect[0], rect[1], 6, 34, fill,
+                               "hoverpill")
             canvas.tag_lower("hoverpill")
         except Exception:
             pass
@@ -1064,9 +1184,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             canvas.delete("halo")
             fill = mix_color(self.blank_bg(), P.fg, 0.24)
             ring = mix_color(self.blank_bg(), P.fg, 0.5)
-            canvas.create_oval(1, 1, size - 1, size - 1, fill=fill,
-                               outline=ring, width=1, tags="halo")
-            canvas.tag_lower("halo", text)
+            photo = self.switch_circle_photo(canvas, size, fill, ring)
+            if photo is not None:
+                canvas.create_image(0, 0, anchor="nw", image=photo,
+                                    tags="halo")
+                canvas.tag_lower("halo", text)
+            else:
+                canvas.create_oval(1, 1, size - 1, size - 1, fill=fill,
+                                   outline=ring, width=1, tags="halo")
+                canvas.tag_lower("halo", text)
             canvas.itemconfigure(text, fill=P.fg, font=self.f_switch_on)
 
         def leave(event):
@@ -1077,6 +1203,43 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         canvas.bind("<Leave>", leave)
         canvas.bind("<Button-1>", lambda ev: self.cycle_list(step))
         return canvas
+
+    def schedule_tab_retry(self):
+        """底图还没准备好: 过一小会儿再重画页签, 换掉没抗锯齿的那版"""
+        if getattr(self, "_tab_retry_job", None) is not None:
+            return
+        try:
+            self._tab_retry_job = self.root.after(150, self.retry_tab_paint)
+        except Exception:
+            self._tab_retry_job = None
+
+    def retry_tab_paint(self):
+        """到点了, 重画页签"""
+        self._tab_retry_job = None
+        try:
+            self.redraw_tabs()
+        except Exception:
+            pass
+
+    def switch_circle_photo(self, canvas, size, fill, ring=None):
+        """给箭头按钮画一颗抗锯齿圆, 位置按按钮现在在窗口里的地方算
+
+        :param canvas: 按钮画布
+        :param size: 边长
+        :param fill: 填充色
+        :param ring: 描边色
+        """
+        try:
+            if not canvas.winfo_ismapped():
+                return None
+            base_x = canvas.winfo_rootx() - self.root.winfo_rootx()
+            base_y = canvas.winfo_rooty() - self.root.winfo_rooty()
+        except Exception:
+            return None
+        photo = self.circle_photo(size, base_x, base_y, fill, ring)
+        if photo is not None:
+            canvas._circle_photo = photo
+        return photo
 
     def update_tabs(self, done, total):
         """刷新两个页签上的数量
