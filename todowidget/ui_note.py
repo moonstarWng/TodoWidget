@@ -22,7 +22,8 @@ from . import theme as T
 from .paths import DATA_DIR
 from .store import walk as _walk
 from .theme import P
-from .utils import MonitorInfo, open_url, round_corners
+from . import screens
+from .utils import open_url, round_corners
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
 LINK_TAIL = ".,;:!?)]}\u3002\uff0c\u3001\uff09\u300b"
@@ -34,25 +35,35 @@ class NoteMixin:
     """便签相关: 一个任务可以开一张便签, 钉住的便签会留在桌面上"""
 
     def screen_center(self, width, height):
-        """算出让窗口落在主窗体那块屏幕正中间的位置"""
-        try:
-            user32 = ctypes.windll.user32
-            hwnd = user32.GetParent(self.root.winfo_id())
-            monitor = user32.MonitorFromWindow(hwnd, 2)  # 2 = 最近的显示器
-            info = MonitorInfo()
-            info.cbSize = ctypes.sizeof(MonitorInfo)
-            if user32.GetMonitorInfoW(monitor, ctypes.byref(info)):
-                area = info.rcWork
-                area_w = area.right - area.left
-                area_h = area.bottom - area.top
-                x = area.left + (area_w - width) // 2
-                y = area.top + (area_h - height) // 2
-                return x, y
-        except Exception:
-            pass
-        screen_w = self.root.winfo_screenwidth()
-        screen_h = self.root.winfo_screenheight()
-        return (screen_w - width) // 2, (screen_h - height) // 2
+        """算出让窗口落在主窗体那块屏幕正中间的位置
+
+        :param width: 窗口宽
+        :param height: 窗口高
+        """
+        left = self.root.winfo_rootx()
+        top = self.root.winfo_rooty()
+        right = left + max(1, self.root.winfo_width())
+        bottom = top + max(1, self.root.winfo_height())
+        # 跟主窗口重叠最多的那块显示器就是"当前这块"
+        best = None
+        best_area = 0
+        for mx, my, mw, mh in screens.monitors():
+            overlap_w = min(right, mx + mw) - max(left, mx)
+            overlap_h = min(bottom, my + mh) - max(top, my)
+            if overlap_w <= 0 or overlap_h <= 0:
+                continue
+            area = overlap_w * overlap_h
+            if area > best_area:
+                best_area = area
+                best = (mx, my, mw, mh)
+        if best is None:
+            try:
+                best = (0, 0, self.root.winfo_screenwidth(),
+                        self.root.winfo_screenheight())
+            except Exception:
+                best = (0, 0, 1920, 1080)
+        mx, my, mw, mh = best
+        return mx + (mw - width) // 2, my + (mh - height) // 2
 
     # ---------------- 打开 / 关闭 ----------------
     def open_note(self, iid):

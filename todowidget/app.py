@@ -3066,8 +3066,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         m.add_command(label="设置…", command=self.open_settings)
         m.add_separator()
         m.add_command(label="清单管理…", command=self.open_list_manager)
-        m.add_command(label="把窗口摆回屏幕里", command=self.reset_position)
-        m.add_command(label="显示 / 隐藏", command=self.hide)
+        m.add_command(label="隐藏", command=self.hide)
         m.add_separator()
         m.add_checkbutton(label="总在最前", command=self.toggle_topmost,
                           variable=tk.BooleanVar(value=self.topmost))
@@ -3268,7 +3267,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return
         image = make_icon()
         menu = pystray.Menu(
-            pystray.MenuItem("显示 / 隐藏", lambda: self.call(self.toggle_window), default=True),
+            pystray.MenuItem(self.tray_toggle_label,
+                             lambda: self.call(self.toggle_window),
+                             default=True),
             pystray.MenuItem("设置…", lambda: self.call(self.open_settings)),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("总在最前", lambda: self.call(self.toggle_topmost),
@@ -3288,6 +3289,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._tray.run_detached()
         except Exception:
             threading.Thread(target=self._tray.run, daemon=True).start()
+
+    def window_hidden(self):
+        """窗口现在是藏起来的吗(托盘菜单文案用)"""
+        try:
+            return self.root.state() == "withdrawn"
+        except Exception:
+            return False
+
+    def tray_toggle_label(self, item=None):
+        """托盘菜单里"显示/隐藏"这一项的文案
+
+        :param item: pystray 传进来的菜单项, 用不到
+        """
+        return "显示窗口" if self.window_hidden() else "隐藏窗口"
 
     def call(self, fn, *args):
         try:

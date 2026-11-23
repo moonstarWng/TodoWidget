@@ -199,11 +199,10 @@ class ListMenuMixin:
 
         self.refresh_list_manager()
         width, height = 440, 460
-        x = self.root.winfo_rootx() + (self.root.winfo_width() - width) // 2
-        y = self.root.winfo_rooty() + (self.root.winfo_height() - height) // 2
-        win.geometry("{}x{}+{}+{}".format(width, height, max(10, x), max(10, y)))
+        x, y = self.screen_center(width, height)
+        win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
-        self.fit_manager_height()
+        self.fit_manager_height(center=True)
         win.lift()
         try:
             win.grab_set()
@@ -253,8 +252,11 @@ class ListMenuMixin:
         except Exception:
             pass
 
-    def fit_manager_height(self):
-        """窗口高度跟着内容走, 太高就滚动(最多 620)"""
+    def fit_manager_height(self, center=False):
+        """窗口高度跟着内容走, 太高就滚动(最多 620)
+
+        :param center: 要不要按新高度重新摆到屏幕中间(第一次打开时)
+        """
         win = getattr(self, "manage_win", None)
         holder = getattr(self, "_manage_list", None)
         if win is None or holder is None:
@@ -264,8 +266,11 @@ class ListMenuMixin:
             content = holder.winfo_reqheight()
             height = min(620, max(300, content + 150))
             width = 440
-            x = win.winfo_x()
-            y = win.winfo_y()
+            if center:
+                x, y = self.screen_center(width, height)
+            else:
+                x = win.winfo_x()
+                y = win.winfo_y()
             win.geometry("{}x{}+{}+{}".format(width, height, x, y))
             self.sync_manage_scroll()
         except Exception:
