@@ -270,7 +270,11 @@ def run_selftest():
     check("收起后标题固定为待办清单",
           app.lbl_title.cget("text") == "待办清单")
     app.set_folded(False)
+    # 展开那一刻磨砂膜就得算得出来, 不然会先闪一帧"没有膜"的底色
+    scrim_ok = (app.scrim_mode != "frost" or app.skin_spec() is None
+                or app.skin_scrim_rect() is not None)
     settle_anim()
+    check("展开时磨砂膜马上就在", scrim_ok)
     check("展开后宽高恢复",
           root.winfo_width() >= 270 and root.winfo_height() >= 220)
     check("展开后列表内容回来", app._body.winfo_ismapped())

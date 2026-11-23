@@ -1549,6 +1549,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             target_w, target_h = self._expanded_size or (330, 460)
             # 先撑到最终大小把内容排好; 无边框窗口再用显示区域把它"放"出来
             self.root.geometry("{}x{}".format(target_w, target_h))
+            # 先把布局排好: 磨砂膜的矩形是按页签/列表的实际位置算的,
+            # 没排好会算成 None(这一帧就没有膜, 看着像块纯色)
+            self.root.update_idletasks()
             # 先只把皮肤窗口撑到目标大小, 区域留到下面按横条裁,
             # 不然这一瞬间皮肤会整个铺开闪一下
             self.sync_skin(target_w, target_h, clip=False)
@@ -2973,6 +2976,29 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 pass
         self.paint_head_bg()
 
+    def widget_offset(self, widget, root=None):
+        """控件在窗口里的坐标, 还没映射时也算得出来
+
+        展开的那一刻控件刚 pack 回来, 事件循环还没跑到, winfo_ismapped()
+        还是 0、winfo_rooty() 也不可靠; 但几何管理器算出来的 winfo_x/y
+        已经是准的, 一层层加起来就行。
+
+        :param widget: 控件
+        :param root: 顶层窗口, 不传就用主窗口
+        """
+        root = root or self.root
+        x = 0
+        y = 0
+        node = widget
+        while node is not None and node is not root:
+            try:
+                x += node.winfo_x()
+                y += node.winfo_y()
+            except Exception:
+                return None
+            node = node.master
+        return x, y
+
     def skin_scrim_rect(self):
         """列表(页签 + 列表区)在窗口里的矩形, 拿不到就返回 None"""
         if self.collapsed:
@@ -2982,15 +3008,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if tabbar is None or body is None:
             return None
         try:
-            if not body.winfo_ismapped() or not tabbar.winfo_ismapped():
+            # 收起过程中这两块是 place 的, 那时不需要膜; 只认 pack 的时候
+            if tabbar.winfo_manager() != "pack" or body.winfo_manager() != "pack":
                 return None
-            root_x = self.root.winfo_rootx()
-            root_y = self.root.winfo_rooty()
+            tab_pos = self.widget_offset(tabbar)
+            body_pos = self.widget_offset(body)
+            if tab_pos is None or body_pos is None:
+                return None
             # 左右顶到窗口边(不再跟着列表的 padx 留缝), 上下按页签/列表算
             left = 0
             right = self.root.winfo_width()
-            top = tabbar.winfo_rooty() - root_y
-            bottom = body.winfo_rooty() - root_y + body.winfo_height()
+            top = tab_pos[1]
+            bottom = body_pos[1] + body.winfo_height()
         except Exception:
             return None
         if right - left < 20 or bottom - top < 20:
