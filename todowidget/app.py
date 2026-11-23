@@ -121,6 +121,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.theme = self.conf.get("theme", "dark")
         self.accent = self.conf.get("accent") or None
         self.custom_themes = self.conf.get("themes") or []
+        self.favorite_themes = list(self.conf.get("favorites") or [])
         self.show_stat = bool(self.conf.get("show_stat", True))
         # 图片皮肤时列表底图的三档: frost 磨砂膜 / solid 纯色 / off 不铺
         mode = self.conf.get("scrim_mode")

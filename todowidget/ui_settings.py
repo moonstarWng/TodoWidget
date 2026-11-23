@@ -419,8 +419,97 @@ class SettingsMixin:
 
     # ---------------- 外观 ----------------
 
+    def favorite_keys(self):
+        """收藏里现在还有效的配色键(自定义配色可能被删了)"""
+        keys = []
+        for key in self.favorite_themes:
+            if self.theme_exists(key):
+                keys.append(key)
+        return keys
+
+    def theme_exists(self, key):
+        """这个配色键现在还有效吗
+
+        :param key: 配色键, 比如 dark / custom:xxx / gradient:xxx
+        """
+        if key.startswith("gradient:"):
+            return key.split(":", 1)[1] in GRADIENTS
+        if key.startswith("custom:"):
+            return self.custom_theme(key) is not None
+        return key in THEMES
+
+    def is_favorite_theme(self, key):
+        """这个配色收藏了没有
+
+        :param key: 配色键
+        """
+        return key in self.favorite_themes
+
+    def toggle_favorite_theme(self, key):
+        """收藏 / 取消收藏一个配色, 然后重建配色列表
+
+        :param key: 配色键
+        """
+        if key in self.favorite_themes:
+            self.favorite_themes.remove(key)
+        else:
+            self.favorite_themes.append(key)
+        self.conf["favorites"] = list(self.favorite_themes)
+        state = self.settings_state()
+        self.close_settings()
+        self.save_conf()
+        self.open_settings(**state)
+
+    def add_favorite_menu(self, menu, key):
+        """右键菜单里加一条 收藏 / 取消收藏
+
+        :param menu: tk.Menu
+        :param key: 配色键
+        """
+        if self.is_favorite_theme(key):
+            label = "取消收藏"
+        else:
+            label = "收藏到「我的收藏」"
+        menu.add_command(label=label,
+                         command=lambda k=key: self.toggle_favorite_theme(k))
+
+    def make_theme_chip_by_key(self, parent, key):
+        """按配色键画一个格子(收藏区用)
+
+        :param parent: 放在哪一行
+        :param key: 配色键, 比如 dark / custom:xxx / gradient:xxx
+        """
+        if key.startswith("gradient:"):
+            short = key.split(":", 1)[1]
+            spec = GRADIENTS.get(short)
+            if spec is not None:
+                self.make_gradient_chip(parent, short, spec)
+            return
+        custom = self.custom_theme(key)
+        if custom is not None:
+            self.make_custom_theme_chip(parent, custom)
+            return
+        if key in THEMES:
+            self.make_theme_chip(parent, key, THEME_NAMES.get(key, key))
+
     def build_look_panel(self, panel):
         """配色 / 自定义配色 / 强调色 / 质感 / 统计"""
+        holder = self.settings_block(
+            panel, "我的收藏", "右键任意配色, 可以收藏到这里")
+        favorites = self.favorite_keys()
+        if favorites:
+            grid = tk.Frame(holder, bg=P.bg)
+            grid.pack(fill="x")
+            row = None
+            for index, key in enumerate(favorites):
+                if index % 4 == 0:
+                    row = tk.Frame(grid, bg=P.bg)
+                    row.pack(fill="x", pady=(0, 6))
+                self.make_theme_chip_by_key(row, key)
+        else:
+            tk.Label(holder, text="还没有收藏", bg=P.bg, fg=P.fg_faint,
+                     font=self.f_small).pack(anchor="w")
+
         holder = self.settings_block(
             panel, "配色",
             "点色块直接换；自定义配色可以右键编辑或删除")
@@ -565,6 +654,11 @@ class SettingsMixin:
         menu = tk.Menu(self.root, tearoff=0)
         menu.add_command(label="复制为自定义配色…",
                          command=lambda: self.copy_theme(kind, key))
+        if kind == "gradient":
+            full_key = "gradient:" + key
+        else:
+            full_key = key
+        self.add_favorite_menu(menu, full_key)
         self.popup_menu(menu, event.x_root, event.y_root)
 
     def copy_theme(self, kind, key):
@@ -626,6 +720,7 @@ class SettingsMixin:
                          command=lambda: self.copy_custom_theme(theme))
         menu.add_command(label="删除配色",
                          command=lambda: self.delete_custom_theme(theme))
+        self.add_favorite_menu(menu, "custom:" + str(theme.get("id")))
         self.popup_menu(menu, event.x_root, event.y_root)
 
     def delete_custom_theme(self, theme):
@@ -853,11 +948,60 @@ class SettingsMixin:
         name_row.pack_configure(before=form)
         name_var = tk.StringVar(value=existing.get("name") or
                                "我的配色 {}".format(len(self.custom_themes) + 1))
-        entry = tk.Entry(name_row, textvariable=name_var, bg=P.bg_alt, fg=P.fg,
+        name_box = tk.Frame(name_row, bg=P.bg)
+        name_box.pack(side="left", fill="x", expand=True)
+        # 平时显示成文字, 点一下才变成输入框
+        name_label = tk.Label(name_box, textvariable=name_var, bg=P.bg_alt,
+                              fg=P.fg, font=self.f_item, anchor="w", padx=8,
+                              pady=4, highlightthickness=1,
+                              highlightbackground=P.border, cursor="hand2")
+        name_label.pack(fill="x")
+        entry = tk.Entry(name_box, textvariable=name_var, bg=P.bg_alt, fg=P.fg,
                          insertbackground=P.accent, relief="flat", bd=0,
                          highlightthickness=1, highlightbackground=P.border,
                          highlightcolor=P.accent, font=self.f_item)
-        entry.pack(side="left", fill="x", expand=True, ipady=4)
+        rename_state = {"before": ""}
+
+        def start_rename(event=None):
+            """点名称: 换成输入框, 光标放到最后
+
+            :param event: 鼠标事件
+            """
+            if entry.winfo_manager():
+                return "break"
+            rename_state["before"] = name_var.get()
+            name_label.pack_forget()
+            entry.pack(fill="x", ipady=4)
+            entry.focus_set()
+            entry.icursor("end")
+            entry.select_clear()
+            entry.xview_moveto(1)
+            return "break"
+
+        def end_rename(event=None, cancel=False):
+            """收起输入框, 变回文字
+
+            :param event: 事件(回车 / 失焦)
+            :param cancel: True 表示按了 Esc, 恢复原名
+            """
+            if not entry.winfo_manager():
+                return "break"
+            if cancel:
+                name_var.set(rename_state["before"] or name_var.get())
+            if not name_var.get().strip():
+                name_var.set(rename_state["before"] or "我的配色")
+            entry.pack_forget()
+            name_label.pack(fill="x")
+            return "break"
+
+        name_label.bind("<Button-1>", start_rename)
+        entry.bind("<Return>", end_rename)
+        entry.bind("<Escape>", lambda ev: end_rename(cancel=True))
+        entry.bind("<FocusOut>", end_rename)
+        edit_hint = tk.Label(name_row, text="\u270e", bg=P.bg, fg=P.fg_faint,
+                             font=self.f_small, cursor="hand2")
+        edit_hint.pack(side="left", padx=(8, 0))
+        edit_hint.bind("<Button-1>", start_rename)
 
         mode_box = section(form, "模式", wrap=210)
         mode_row = tk.Frame(mode_box, bg=P.bg)
@@ -1702,7 +1846,9 @@ class SettingsMixin:
         win.after(30, fit_height)
         win.lift()
         win.focus_force()
-        entry.focus_set()
+        if not editing:
+            # 新建时名字默认是"我的配色 N", 直接进编辑态方便改
+            start_rename()
         try:
             win.grab_set()
         except Exception:
