@@ -1526,12 +1526,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     w, h = 330, 460
             self._expanded_size = (w, h)
             self.btn_fold.config(text="\u25be")
-            # 收起后不看统计, 先把这一行去掉, 横条才缩得窄
+            # 收起前先把内容整体藏掉: 先删再收, 中间就不会出现内容错乱的一帧
             self.stat_box.pack_forget()
-            # 页签行也一起收掉: 不然它是最后才被窗口边缘切掉的一行, 很突兀;
-            # 收掉后让下面的列表顶上来, 收起过程就只有"拉窗帘"了
-            self._tabbar.pack_forget()
+            for widget in (self._track, self._tabbar, self._body,
+                           self._foot, self._line):
+                widget.pack_forget()
             self.root.update_idletasks()
+            self.hide_list_content()
             target_w, target_h = self.folded_width(), folded_h
             self._folded_size = (target_w, target_h)
             # 收起成横条时没有页签行, 箭头也藏起来
@@ -2499,6 +2500,27 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                             height - 1 - pad],
                            fill=hex_to_rgb(self.footer_color))
         return image
+
+    def hide_list_content(self):
+        """收起前把画在底图上的列表内容擦掉
+
+        皮肤模式下列表文字是画进底图的, 收起动画又是一点点裁这张图;
+        不擦的话文字会跟着窗口一路被裁到最后, 中间还会有错位的错乱感。
+        直接用没画列表的 _skin_base 重新合一张干净的。
+        """
+        if self.skin_spec() is None or self._skin_base is None:
+            return
+        try:
+            image = self._skin_base.copy()
+            image = self.paint_bars(image)
+            self._skin_plain = image.copy()
+            if self.border_active():
+                image = self.apply_border(image, None)
+            self.skin_push_image(image)
+            # 这张是擦过内容的, 记成「没正经裁过」, 展开时会重新合一张带列表的
+            self._skin_size = None
+        except Exception as exc:
+            print("hide list content failed:", exc)
 
     def compose_skin(self, base):
         """由"底图 + 膜"合成最终皮肤图: 列表自绘 + 顶底栏 + 边框

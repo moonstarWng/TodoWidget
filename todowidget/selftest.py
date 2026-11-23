@@ -245,9 +245,11 @@ def run_selftest():
     first_frame_ok = (not app._skin_layered
                       or window_region(app.skin_win) != 0)
     tabbar_gone = not app._tabbar.winfo_ismapped()
+    content_gone = not app._body.winfo_ismapped()
     settle_anim()
     check("收起第一帧不会闪展开图", first_frame_ok)
     check("收起时页签行立刻收起", tabbar_gone)
+    check("收起时列表内容立刻消失", content_gone)
     folded_w = root.winfo_width()
     stat_hidden = not app.stat_box.winfo_manager()
     folded_surface = tuple(app._skin_surface or ())
@@ -271,6 +273,7 @@ def run_selftest():
     settle_anim()
     check("展开后宽高恢复",
           root.winfo_width() >= 270 and root.winfo_height() >= 220)
+    check("展开后列表内容回来", app._body.winfo_ismapped())
     expanded_surface = tuple(app._skin_surface or ())
     expanded_layer_ok = (not app._skin_layered
                          or expanded_surface == (root.winfo_width(),
