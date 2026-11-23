@@ -1563,7 +1563,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.sync_skin(target_w, target_h, clip=False)
             self.clip_skin(start_w, start_h)
             self.fit_width(target_w)
-            animator = self.animate_reveal if animate else None
+            # 展开不做"区域逐渐露出来"的动画: 窗口被裁小时周围会露出桌面/
+            # 别的窗口, 看着就是一大块黑的; 直接显示整窗更干净
+            animator = None
 
         def finish():
             if self.collapsed:
@@ -1666,7 +1668,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if head.winfo_manager() != "place":
             head.pack_forget()
             head.place(x=0, y=0, width=inner_w, height=40)
-        steps = 14
+        steps = 6
         state = {"step": 0}
 
         def tick():
@@ -1686,7 +1688,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.clip_skin(width, height)
             self.paint_skin_frame(width, height)
             if state["step"] < steps:
-                self._fold_job = self.root.after(16, tick)
+                self._fold_job = self.root.after(10, tick)
                 return
             self._fold_job = None
             self._animating = False
@@ -1707,7 +1709,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         :param done: 动画结束后的收尾函数
         """
         self.stop_fold_anim()
-        steps = 14
+        steps = 6
         state = {"step": 0}
 
         def tick():
@@ -1720,7 +1722,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.clip_skin(max(1, width), max(1, height))
             self.paint_skin_frame(max(1, width), max(1, height))
             if state["step"] < steps:
-                self._fold_job = self.root.after(16, tick)
+                self._fold_job = self.root.after(10, tick)
                 return
             self._fold_job = None
             self._animating = False
