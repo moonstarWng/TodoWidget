@@ -35,15 +35,27 @@ class NoteMixin:
     """便签相关: 一个任务可以开一张便签, 钉住的便签会留在桌面上"""
 
     def screen_center(self, width, height):
-        """算出让窗口落在主窗体那块屏幕正中间的位置
+        """主窗口那块屏的正中间
 
         :param width: 窗口宽
         :param height: 窗口高
         """
-        left = self.root.winfo_rootx()
-        top = self.root.winfo_rooty()
-        right = left + max(1, self.root.winfo_width())
-        bottom = top + max(1, self.root.winfo_height())
+        return self.screen_center_for(self.root, width, height)
+
+    def screen_center_for(self, widget, width, height):
+        """某个窗口所在那块屏的正中间
+
+        :param widget: 以哪个窗口为准(比如设置窗口)
+        :param width: 要摆的宽
+        :param height: 要摆的高
+        """
+        try:
+            left = widget.winfo_rootx()
+            top = widget.winfo_rooty()
+            right = left + max(1, widget.winfo_width())
+            bottom = top + max(1, widget.winfo_height())
+        except Exception:
+            left, top, right, bottom = 0, 0, 1, 1
         best = screens.monitor_for(left, top, right, bottom)
         if best is None:
             try:

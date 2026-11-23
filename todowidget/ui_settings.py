@@ -177,16 +177,18 @@ class SettingsMixin:
             widget.bind("<Button-1>", start_move)
             widget.bind("<B1-Motion>", do_move)
 
-    def current_monitor(self):
-        """主窗口所在的那块显示器(工作区)
+    def current_monitor(self, widget=None):
+        """某个窗口所在的那块显示器(工作区), 默认主窗口
 
+        :param widget: 以哪个窗口为准
         :return: (x, y, w, h)
         """
+        target = widget if widget is not None else self.root
         try:
-            left = self.root.winfo_rootx()
-            top = self.root.winfo_rooty()
-            right = left + max(1, self.root.winfo_width())
-            bottom = top + max(1, self.root.winfo_height())
+            left = target.winfo_rootx()
+            top = target.winfo_rooty()
+            right = left + max(1, target.winfo_width())
+            bottom = top + max(1, target.winfo_height())
             found = screens.monitor_for(left, top, right, bottom)
             if found is not None:
                 return found
@@ -1887,8 +1889,10 @@ class SettingsMixin:
         render_preview()
 
         width, height = 710, 620
-        mx, my, mw, mh = self.current_monitor()
-        x, y = self.screen_center(width, height)
+        # 按"从哪个窗口打开的"居中: 设置窗口被拖到哪块屏, 编辑器就跟到哪块
+        base = self.settings_win or self.root
+        mx, my, mw, mh = self.current_monitor(base)
+        x, y = self.screen_center_for(base, width, height)
         x = max(mx + 8, min(x, mx + mw - width - 8))
         y = max(my + 8, min(y, my + mh - height - 8))
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
