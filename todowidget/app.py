@@ -2092,8 +2092,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return None
             root_x = self.root.winfo_rootx()
             root_y = self.root.winfo_rooty()
-            left = body.winfo_rootx() - root_x
-            right = left + body.winfo_width()
+            # 左右顶到窗口边(不再跟着列表的 padx 留缝), 上下按页签/列表算
+            left = 0
+            right = self.root.winfo_width()
             top = tabbar.winfo_rooty() - root_y
             bottom = body.winfo_rooty() - root_y + body.winfo_height()
         except Exception:
@@ -2120,6 +2121,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         draw.rounded_rectangle(
             [0, 0, width * scale - 1, height * scale - 1],
             radius=10 * scale, fill=255)
+        # 上沿是页签底下的直线, 不要圆角(圆了会在两边露出底图)
+        draw.rectangle([0, 0, width * scale - 1, height * scale // 2], fill=255)
         mask = big.resize((width, height), Image.LANCZOS)
         # 只留最近几份, 别把拖动改大小时的每一帧都攒着
         if len(self._scrim_cache) > 6:
