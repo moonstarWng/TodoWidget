@@ -489,6 +489,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._drag = None
             self._drag_moved = False
             self.save_geom()
+            if moved:
+                # 拖动期间是"不重画搬家", 松手补一次完整重画
+                self.sync_skin()
+                self.redraw_windows()
             if as_click and not moved and not self.collapsed:
                 self.open_list_menu(e)
 
@@ -1239,6 +1243,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
 
     def on_win_configure(self, e):
         if e.widget is not self.root:
+            return
+        if getattr(self, "_drag", None):
+            # 拖窗口时只有位置在变, 大小/皮肤都由 apply_window_rect 逐帧处理了
             return
         # 等事件处理完再按真实窗口大小同步, 免得用到过期的事件尺寸(会闪一帧大窗口)
         # 动画期间尺寸由动画自己裁, 这里不插手
@@ -2254,8 +2261,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         窗口一次变化会连着来一串事件, 每个都排一个同步的话,
         皮肤窗口会被反复挪位置/重画, 收起的时候就看着一闪一闪的。
         """
-        if self._resizing:
-            # 拖动中由 apply_resize_size 逐帧同步, 这里再补一次纯属多干活
+        if self._resizing or getattr(self, "_drag", None):
+            # 拖动/改大小的时候位置是逐帧同步的, 这里再补一次纯属多干活,
+            # 而且会让皮肤窗口反复重排/重画(看着一直闪)
             return
         if self._skin_sync_job is not None:
             return
@@ -2355,14 +2363,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             user32 = ctypes.windll.user32
             no_zorder = 0x0004
             no_activate = 0x0010
+            no_redraw = 0x0008
             main = self.main_hwnd()
             user32.SetWindowPos(main, 0, x, y, width, height,
-                                no_zorder | no_activate)
+                                no_zorder | no_activate | no_redraw)
             skin = self.skin_hwnd()
             if skin:
-                # 顺便把它压在主窗口下面, 一步到位
-                user32.SetWindowPos(skin, main, x, y, width, height,
-                                    no_activate)
+                # 已经紧挨在主窗口下面时只挪位置, 不动 z 序:
+                # 每帧重排一次顶层窗口会让两边都重画, 拖起来就是闪
+                if user32.GetWindow(skin, 3) == main:
+                    user32.SetWindowPos(skin, 0, x, y, width, height,
+                                        no_zorder | no_activate | no_redraw)
+                else:
+                    user32.SetWindowPos(skin, main, x, y, width, height,
+                                        no_activate | no_redraw)
                 self._skin_geom = (width, height, x, y)
         except Exception:
             pass
@@ -2396,6 +2410,17 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return
         self._skin_stack_tries = 0
         self.stack_skin(hwnd)
+
+    def redraw_windows(self):
+        """强制把两个窗口重画一遍(拖完窗口补一次)"""
+        try:
+            user32 = ctypes.windll.user32
+            flags = 0x0001 | 0x0080 | 0x0100   # INVALIDATE | ALLCHILDREN | UPDATENOW
+            for hwnd in (self.main_hwnd(), self.skin_hwnd()):
+                if hwnd:
+                    user32.RedrawWindow(hwnd, None, None, flags)
+        except Exception:
+            pass
 
     def stack_skin(self, hwnd):
         """把皮肤窗口的原生句柄压到主窗口下面

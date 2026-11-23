@@ -419,6 +419,9 @@ class ListPaintMixin:
         """过一会儿重画一次列表(合并同一轮里的多次请求)"""
         if not self.list_paint_ready() or getattr(self, "_menu_open", False):
             return
+        if getattr(self, "_drag", None):
+            # 拖窗口的时候不用重画列表
+            return
         if getattr(self, "_list_paint_job", None) is not None:
             return
         self._list_paint_job = self.root.after_idle(self.list_paint_now)
