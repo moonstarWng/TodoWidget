@@ -156,6 +156,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._skin_target = None
         self._skin_click = None
         self._skin_layered = False
+        self._skin_surface = None
         self._skin_mask_cache = {}
         self._folded_size = None
         self._skin_source = None
@@ -2026,6 +2027,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.skin_win = win
             self.skin_label = label
             self._skin_layered = False
+            self._skin_surface = None
             self._skin_mask_cache = {}
             self._skin_size = None
             self._skin_geom = None
@@ -2052,6 +2054,25 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             ctypes.windll.user32.SetWindowRgn(win.winfo_id(), None, True)
         except Exception:
             pass
+
+    def refresh_layered_surface(self, width=None, height=None):
+        """按当前窗口大小重推一次分层图
+
+        收起后皮肤图还是展开时那张(原来靠区域裁出横条), 换成 alpha 以后
+        必须用裁过的图, 不然窗口里只剩左上角那个圆角。
+        """
+        if not self._skin_layered or self._skin_image is None:
+            return
+        try:
+            image = self._skin_image
+            width = max(2, int(width or self.root.winfo_width()))
+            height = max(2, int(height or self.root.winfo_height()))
+            if image.size != (width, height):
+                image = image.crop((0, 0, min(width, image.width),
+                                    min(height, image.height)))
+            self.push_layered_skin(image)
+        except Exception as exc:
+            print("refresh layered failed:", exc)
 
     def drop_skin_regions(self):
         """分层窗口接管圆角以后, 把之前的 1 位窗口区域清掉
@@ -2420,7 +2441,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             ctypes.memmove(bits, data, len(data))
             old = gdi32.SelectObject(memory, bitmap)
             source = wintypes.POINT(0, 0)
-            target = wintypes.POINT(win.winfo_rootx(), win.winfo_rooty())
+            geom = self._skin_geom
+            if geom:
+                target = wintypes.POINT(int(geom[2]), int(geom[3]))
+            else:
+                target = wintypes.POINT(win.winfo_rootx(),
+                                        win.winfo_rooty())
             size = wintypes.SIZE(width, height)
             blend = _BlendFunction(0, 0, 255, 1)  # AC_SRC_OVER / AC_SRC_ALPHA
             ok = user32.UpdateLayeredWindow(
@@ -2432,6 +2458,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             user32.ReleaseDC(None, screen)
             if not ok:
                 return False
+            self._skin_surface = (width, height)
             if not self._skin_layered:
                 self._skin_layered = True
                 # 之前设过 1 位的圆角区域, 会让边还是台阶, 等这一轮忙完清掉
@@ -2999,8 +3026,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 # 主窗口藏起来过又显示出来时, 皮肤窗口也要跟着回来
                 win.deiconify()
                 # 重新显示出来的窗口可能把分层样式丢了, 补推一次
-                if self._skin_image is not None:
-                    self.push_layered_skin(self._skin_image)
+                self.refresh_layered_surface()
             try:
                 want_top = bool(self.topmost)
                 if bool(win.attributes("-topmost")) != want_top:
@@ -3044,9 +3070,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 # 等这一轮事件忙完再压回去(压早的话会把位置请求作废)
                 self.root.after_idle(self.restack_skin)
             # 刚建出来时窗口还没显示, 拿不到顶层包装窗口, 分层推送会失败;
-            # 这里等它就位了再补一次
-            if not self._skin_layered and self._skin_image is not None:
-                self.push_layered_skin(self._skin_image)
+            # 这里等它就位了再补一次。收起 / 展开切换后窗口大小变了,
+            # 推出去的图层也得跟着换, 不然会露出上一张图的残片
+            if self._skin_image is not None:
+                if not self._skin_layered:
+                    self.push_layered_skin(self._skin_image)
+                elif self._skin_surface != size:
+                    self.refresh_layered_surface(size[0], size[1])
         except Exception:
             pass
 

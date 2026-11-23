@@ -195,6 +195,10 @@ def run_selftest():
     settle_anim()
     folded_w = root.winfo_width()
     stat_hidden = not app.stat_box.winfo_manager()
+    folded_surface = tuple(app._skin_surface or ())
+    folded_layer_ok = (not app._skin_layered
+                       or folded_surface == (folded_w, root.winfo_height()))
+    check("收起后里层图层缩到横条大小", folded_layer_ok)
     check("收起后横条变窄", folded_w < before_w and folded_w <= 220)
     check("收起后不显示统计文字", stat_hidden)
     check("收起后标题固定为待办清单",
@@ -203,6 +207,11 @@ def run_selftest():
     settle_anim()
     check("展开后宽高恢复",
           root.winfo_width() >= 270 and root.winfo_height() >= 220)
+    expanded_surface = tuple(app._skin_surface or ())
+    expanded_layer_ok = (not app._skin_layered
+                         or expanded_surface == (root.winfo_width(),
+                                                 root.winfo_height()))
+    check("展开后里层图层跟着放大", expanded_layer_ok)
     # 统计文字按可用宽度自动显示 / 隐藏(窗口有最小宽度, 直接按宽度算)
     app.fit_width(330)
     wide_shown = bool(app.stat_box.winfo_manager())
