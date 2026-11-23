@@ -1149,7 +1149,9 @@ class SettingsMixin:
         alpha_value.pack(side="left", padx=8)
 
         def auto_bg():
-            """自动文字色按哪个底色推: 图片模式按图片平均色, 跟主界面保持一致"""
+            """自动文字色按哪个底色推: 图片按平均色, 渐变按中间色"""
+            if state.get("mode") == "gradient":
+                return mix_color(state["grad_start"], state["grad_end"], 0.5)
             if (state.get("mode") != "image" or not state.get("image")
                     or Image is None):
                 return state["bg"]
@@ -1167,6 +1169,14 @@ class SettingsMixin:
             pixel = image.resize((1, 1), Image.BILINEAR).getpixel((0, 0))
             return "#{:02x}{:02x}{:02x}".format(*pixel[:3])
 
+        def suggest_fg():
+            """按当前背景推一个文字颜色"""
+            return auto_text_color(auto_bg())
+
+        def refresh_fg_swatch():
+            """背景变了: 自动色的小样跟着更新"""
+            fg_swatch.configure(bg=state["fg"] or suggest_fg())
+
         color_box = section(page_color, "文字与强调色",
                             "改完看左边的小样")
         fg_row = row(color_box, "文字色")
@@ -1183,6 +1193,15 @@ class SettingsMixin:
                                font=self.f_small, padx=6, pady=2, cursor="hand2")
         fg_auto_btn.pack(side="left")
         fg_auto_btn.bind("<Button-1>", lambda ev: reset_fg())
+        fg_suggest = tk.Label(fg_row, text="自动推荐", bg=P.bg, fg=P.fg_faint,
+                              font=self.f_small, padx=6, pady=2,
+                              cursor="hand2")
+        fg_suggest.pack(side="left")
+        fg_suggest.bind("<Button-1>", lambda ev: apply_fg(suggest_fg()))
+        fg_suggest.bind("<Enter>",
+                        lambda ev, w=fg_suggest: w.configure(fg=P.fg))
+        fg_suggest.bind("<Leave>",
+                        lambda ev, w=fg_suggest: w.configure(fg=P.fg_faint))
         dropper(fg_row, lambda c: apply_fg(c))
         fg_row.pack(fill="x")
 
@@ -1341,8 +1360,7 @@ class SettingsMixin:
             if picked:
                 state["bg"] = picked
                 bg_swatch.configure(bg=picked)
-                if not state["fg"]:
-                    fg_swatch.configure(bg=auto_text_color(auto_bg()))
+                refresh_fg_swatch()
                 refresh_preview()
 
         def pick_fg():
@@ -1376,6 +1394,8 @@ class SettingsMixin:
             if picked:
                 state[key] = picked
                 swatch.configure(bg=picked)
+                refresh_fg_swatch()
+                refresh_preview()
 
         def set_angle(key):
             state["grad_angle"] = key
@@ -1409,12 +1429,14 @@ class SettingsMixin:
             state["_pil"] = None
             state["offset"] = [0.0, 0.0]
             image_label.config(text=os.path.basename(state["image"]))
+            refresh_fg_swatch()
             render_preview()
 
         def clear_image():
             state["image"] = ""
             state["_pil"] = None
             image_label.config(text="没有")
+            refresh_fg_swatch()
             render_preview()
 
         def apply_fg(color):
@@ -1546,6 +1568,7 @@ class SettingsMixin:
             else:
                 solid_frame.pack(fill="x")
             update_hint_text()
+            refresh_fg_swatch()
             render_preview()
             resize_window()
 
@@ -1585,7 +1608,7 @@ class SettingsMixin:
                 y = win.winfo_y()
                 if y + height > win.winfo_screenheight() - 40:
                     y = max(20, win.winfo_screenheight() - height - 40)
-                win.geometry("{}x{}+{}+{}".format(660, height, x, y))
+                win.geometry("{}x{}+{}+{}".format(710, height, x, y))
                 win.after(20, lambda w=win: round_corners(w, 12))
             except Exception:
                 pass
@@ -1833,7 +1856,7 @@ class SettingsMixin:
         set_mode(state["mode"])
         render_preview()
 
-        width, height = 660, 620
+        width, height = 710, 620
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
         y = base.winfo_rooty() + (base.winfo_height() - height) // 2
