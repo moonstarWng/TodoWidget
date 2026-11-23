@@ -13,6 +13,7 @@ Tk 的 Treeview 只会用 GDI 往"色键背景"上画字, 抗锯齿只能跟色�
 
 from PIL import Image, ImageDraw, ImageFont
 
+from . import fonts
 from .theme import P, hex_to_rgb
 
 # Tk 的点数到像素: 96dpi 下 1pt = 1.333px
@@ -353,38 +354,88 @@ class ListPaintMixin:
         self._list_fonts[key] = font
         return font
 
+    def list_paint_family(self, kind, tk_font):
+        """某一类字符该用哪个字族
+
+        :param kind: "cn" 中文 / "latin" 西文
+        :param tk_font: 兜底的 Tk 字体(配色里没指定时用它的字族)
+        """
+        if kind == "latin":
+            picked = getattr(self, "font_latin", "") or ""
+        else:
+            picked = getattr(self, "font_cn", "") or ""
+        if picked:
+            return picked
+        try:
+            return tk_font.actual("family")
+        except Exception:
+            return ""
+
+    def list_paint_kind_font(self, kind, tk_font, bold):
+        """按"中文/西文"取一个 PIL 字体(带缓存)
+
+        :param kind: "cn" 或 "latin"
+        :param tk_font: 兜底的 Tk 字体
+        :param bold: 是否粗体
+        """
+        px = self.list_paint_px(tk_font)
+        family = self.list_paint_family(kind, tk_font)
+        key = ("fam", family, px, bool(bold))
+        cached = self._list_fonts.get(key)
+        if cached is not None:
+            return cached
+        font = fonts.load(family, px, bold) if family else None
+        if font is None:
+            # 找不到就用原来的雅黑
+            font = self.list_paint_font(tk_font, bold)
+        self._list_fonts[key] = font
+        return font
+
     def list_paint_text(self, draw, x, baseline, text, tk_font, bold, color):
-        """画一行文字; 雅黑里缺的符号自动改用符号字体
+        """画一行文字: 中文用中文字体, 西文用西文字体, 缺字再换符号字体
 
         :param draw: ImageDraw
         :param x: 起点
         :param baseline: 基线 y
         :param text: 文字
-        :param tk_font: Tk 字体对象
+        :param tk_font: Tk 字体对象(兜底)
         :param bold: 是否粗体
         :param color: 颜色
         """
-        primary = self.list_paint_font(tk_font, bold)
-        if primary is None:
-            return
-        missing = False
-        for ch in text:
-            if not self.list_paint_has_glyph(primary, ch):
-                missing = True
-                break
-        if not missing:
-            draw.text((x, baseline), text, font=primary, fill=color,
-                      anchor="ls")
-            return
         cursor = x
+        runs = []
         for ch in text:
-            font = self.list_paint_char_font(ch, tk_font, bold) or primary
-            try:
-                draw.text((cursor, baseline), ch, font=font, fill=color,
-                          anchor="ls")
-                cursor += font.getlength(ch)
-            except Exception:
+            kind = "cn" if is_cjk(ch) else "latin"
+            if runs and runs[-1][0] == kind:
+                runs[-1][1].append(ch)
+            else:
+                runs.append((kind, [ch]))
+        for kind, chars in runs:
+            piece = "".join(chars)
+            font = self.list_paint_kind_font(kind, tk_font, bold)
+            if font is None:
                 continue
+            missing = any(not self.list_paint_has_glyph(font, ch)
+                          for ch in piece)
+            if not missing:
+                try:
+                    draw.text((cursor, baseline), piece, font=font,
+                              fill=color, anchor="ls")
+                    cursor += font.getlength(piece)
+                except Exception:
+                    continue
+                continue
+            # 这段里有画不出来的字: 逐字画, 缺的换符号字体
+            for ch in piece:
+                one = font
+                if not self.list_paint_has_glyph(one, ch):
+                    one = self.list_paint_char_font(ch, tk_font, bold) or one
+                try:
+                    draw.text((cursor, baseline), ch, font=one, fill=color,
+                              anchor="ls")
+                    cursor += one.getlength(ch)
+                except Exception:
+                    continue
 
     def list_paint_pin(self, draw, iid, left, top, width, height):
         """置顶标记(用系统彩色 emoji 画图钉)
@@ -435,6 +486,19 @@ class ListPaintMixin:
             self.reload_skin_image(force=True)
             return
         self.skin_push_image(self.compose_skin(self._skin_base))
+
+
+def is_cjk(ch):
+    """这个字符算中文(含中日韩标点/全角符号)
+
+    :param ch: 单个字符
+    """
+    code = ord(ch)
+    return (0x2E80 <= code <= 0x9FFF
+            or 0x3000 <= code <= 0x303F
+            or 0xF900 <= code <= 0xFAFF
+            or 0xFF00 <= code <= 0xFFEF
+            or 0x20000 <= code <= 0x2FFFF)
 
 
 def ttk_style(root):

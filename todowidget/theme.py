@@ -173,11 +173,21 @@ def set_theme(name, accent=None):
     apply_palette(theme, accent)
 
 
-def pick_font(root, size, weight="normal", overstrike=False):
-    """挑一个系统里有的中文字体"""
-    families = set(tkfont.families(root))
-    family = next((f for f in FONTS if f in families), "TkDefaultFont")
-    return tkfont.Font(root=root, family=family, size=size,
+def pick_font(root, size, weight="normal", overstrike=False, family=""):
+    """挑一个系统里有的字体
+
+    :param root: 任意 Tk 窗口(用来查可用字族)
+    :param size: 字号(点)
+    :param weight: "normal" 或 "bold"
+    :param overstrike: 要不要删除线
+    :param family: 指定字族; 传空就按内置顺序挑一个中文的
+    """
+    available = set(tkfont.families(root))
+    if family and family in available:
+        chosen = family
+    else:
+        chosen = next((f for f in FONTS if f in available), "TkDefaultFont")
+    return tkfont.Font(root=root, family=chosen, size=size,
                        weight=weight, overstrike=overstrike)
 
 

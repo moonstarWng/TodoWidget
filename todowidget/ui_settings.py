@@ -8,6 +8,7 @@ import queue
 import shutil
 import threading
 import tkinter as tk
+import tkinter.font as tkfont
 import uuid
 from tkinter import colorchooser, filedialog, messagebox, ttk
 
@@ -20,7 +21,7 @@ except Exception:
     ImageGrab = None
     ImageTk = None
 
-from . import paths, updater
+from . import fonts, paths, updater
 from .paths import DATA_DIR
 from .theme import (P, GRADIENTS, THEMES, THEME_NAMES, auto_text_color,
                     best_text_color, mix_color, set_theme)
@@ -719,6 +720,8 @@ class SettingsMixin:
             "grad_end": existing.get("grad_end") or "#3a2a52",
             "grad_angle": existing.get("grad_angle") or "vertical",
             "fg": existing.get("fg") or "",
+            "font_cn": existing.get("font_cn") or "",
+            "font_latin": existing.get("font_latin") or "",
             "scrim_mode": existing.get("scrim") or "frost",
             "radius": int(existing.get("radius") or 0),
             "border_mode": (existing.get("border") or {}).get("mode") or "none",
@@ -1090,6 +1093,58 @@ class SettingsMixin:
             dropper(line, lambda c, k=key: apply_bar_color(k, c))
             bar_rows[key] = (swatch, chip)
 
+        # ---- 字体(跟着配色走) ----
+        tk.Label(right, text="字体", bg=P.bg, fg=P.fg,
+                 font=self.f_group).pack(anchor="w", pady=(14, 0))
+        tk.Label(right, text="中文和西文可以分开选；列表按字符自动用对应字体",
+                 bg=P.bg, fg=P.fg_dim, font=self.f_small, anchor="w",
+                 justify="left", wraplength=300).pack(fill="x", pady=(2, 0))
+        default_label = "（默认）"
+        try:
+            tk_fonts = sorted(tkfont.families(win))
+        except Exception:
+            tk_fonts = list(fonts.registry_families())
+        cn_values = [default_label] + fonts.cjk_families(tk_fonts)
+        latin_values = [default_label] + [name for name in tk_fonts
+                                          if not name.startswith("@")]
+        for key, label, values in (("font_cn", "中文", cn_values),
+                                   ("font_latin", "西文", latin_values)):
+            line = tk.Frame(right, bg=P.bg)
+            line.pack(fill="x", pady=(6, 0))
+            tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
+                     font=self.f_small, width=6, anchor="w").pack(side="left")
+            box = ttk.Combobox(line, values=values, state="readonly",
+                               width=18, font=self.f_small)
+            current = state.get(key) or default_label
+            box.set(current if current in values else default_label)
+            box.pack(side="left", fill="x", expand=True)
+            box.bind("<<ComboboxSelected>>",
+                     lambda ev, k=key, b=box: set_font(k, b))
+
+        def set_font(key, box):
+            """下拉选完字体: 存进草稿并刷新小样
+
+            :param key: font_cn / font_latin
+            :param box: 下拉框
+            """
+            value = box.get()
+            state[key] = "" if value == default_label else value
+            refresh_preview()
+
+        def mock_font(kind, size, bold=False):
+            """小样里按选中的字体画
+
+            :param kind: "cn" 或 "latin"
+            :param size: 像素大小
+            :param bold: 是否粗体
+            """
+            family = state.get("font_cn" if kind == "cn" else "font_latin") or ""
+            if family:
+                font = fonts.load(family, size, bold)
+                if font is not None:
+                    return font
+            return preview_font(size, bold)
+
         note = tk.Label(
             right,
             text="渐变 / 图片模式：底图铺满整窗，文字不透明。"
@@ -1294,14 +1349,14 @@ class SettingsMixin:
             if key == "image":
                 image_frame.pack(fill="x")
                 alpha_row.pack(fill="x")
-                resize_window(665)
+                resize_window(735)
                 render_preview()
             elif key == "gradient":
                 gradient_frame.pack(fill="x")
-                resize_window(520)
+                resize_window(595)
             else:
                 solid_frame.pack(fill="x")
-                resize_window(470)
+                resize_window(545)
             if key != "image":
                 alpha_row.pack_forget()
 
@@ -1389,8 +1444,8 @@ class SettingsMixin:
                 draw.rectangle([0, body_bottom, w, h], fill=state["footer_color"])
             # 示例行
             fg = state["fg"] or auto_text_color(auto_bg())
-            small_font = preview_font(9)
-            tiny_font = preview_font(8)
+            small_font = mock_font("cn", 9)
+            tiny_font = mock_font("cn", 8)
             y = body_top + 4
             row_h = max(11, int(round(h * 0.055)))
             draw.rectangle([2, y, w - 2, y + row_h - 2],
@@ -1549,8 +1604,8 @@ class SettingsMixin:
         set_mode(state["mode"])
         render_preview()
 
-        sizes = {"solid": 470, "gradient": 520, "image": 665}
-        width, height = 660, sizes.get(state["mode"], 430)
+        sizes = {"solid": 545, "gradient": 595, "image": 735}
+        width, height = 660, sizes.get(state["mode"], 545)
         base = self.settings_win or self.root
         x = base.winfo_rootx() + (base.winfo_width() - width) // 2
         y = base.winfo_rooty() + (base.winfo_height() - height) // 2
@@ -1608,6 +1663,8 @@ class SettingsMixin:
                      offset=[round(float(state.get("offset", [0.0, 0.0])[0]), 3),
                              round(float(state.get("offset", [0.0, 0.0])[1]), 3)],
                      alpha=round(float(state.get("alpha") or 0.0), 3),
+                     font_cn=state.get("font_cn") or "",
+                     font_latin=state.get("font_latin") or "",
                      scrim=state.get("scrim_mode") or "frost",
                      radius=int(state.get("radius") or 0),
                      border=dict(mode=state.get("border_mode") or "none",

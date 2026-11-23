@@ -119,6 +119,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             mode = "frost" if self.conf.get("scrim", True) else "off"
         self.scrim_mode = mode if mode in ("frost", "solid", "off") else "frost"
         # 外观细节(边框 / 顶底栏)存在配色里, 这里先给默认值
+        self.font_cn = ""
+        self.font_latin = ""
         self.border_mode = "none"
         self.border_width = 2
         self.border_color = "#3b7cf6"
@@ -314,6 +316,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             P.fg_dim = mix_color(P.fg, P.bg, 0.22)
             P.fg_faint = mix_color(P.fg, P.bg, 0.45)
         extras = self.theme_extras()
+        self.font_cn = extras["font_cn"]
+        self.font_latin = extras["font_latin"]
         self.scrim_mode = extras["scrim_mode"]
         self.border_mode = extras["border_mode"]
         self.border_width = extras["border_width"]
@@ -366,24 +370,24 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         r.overrideredirect(True)
         r.minsize(270, 220)
 
-        self.f_title = pick_font(r, 11, "bold")
-        self.f_group = pick_font(r, 10, "bold")
-        self.f_group_done = pick_font(r, 10, "bold", True)
-        self.f_item = pick_font(r, 10)
-        self.f_item_done = pick_font(r, 10, overstrike=True)
-        self.f_small = pick_font(r, 8)
+        self.f_title = pick_font(r, 11, "bold", family=self.font_cn)
+        self.f_group = pick_font(r, 10, "bold", family=self.font_cn)
+        self.f_group_done = pick_font(r, 10, "bold", True, family=self.font_cn)
+        self.f_item = pick_font(r, 10, family=self.font_cn)
+        self.f_item_done = pick_font(r, 10, overstrike=True, family=self.font_cn)
+        self.f_small = pick_font(r, 8, family=self.font_cn)
         # 自绘之后文字是灰度抗锯齿, 不用再加粗; 日期稍微放大一点更好认
         self.f_item_skin = self.f_item
         self.f_item_skin_done = self.f_item_done
         self.f_group_skin = self.f_group
         self.f_group_skin_done = self.f_group_done
         if self.skin_spec() is not None:
-            self.f_small_skin = pick_font(r, 9)
+            self.f_small_skin = pick_font(r, 9, family=self.font_cn)
         else:
             self.f_small_skin = self.f_small
-        self.f_note_h1 = pick_font(r, 13, "bold")
-        self.f_note_h2 = pick_font(r, 11, "bold")
-        self.f_note_bold = pick_font(r, 10, "bold")
+        self.f_note_h1 = pick_font(r, 13, "bold", family=self.font_cn)
+        self.f_note_h2 = pick_font(r, 11, "bold", family=self.font_cn)
+        self.f_note_bold = pick_font(r, 10, "bold", family=self.font_cn)
 
         # 有边框时内容往里让出一圈, 那一圈透出皮肤窗口画的边框
         inner = tk.Frame(r, bg=P.bg)
@@ -450,7 +454,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         tabbar.pack(fill="x", side="top")
         tabbar.pack_propagate(False)
         self._tabbar = tabbar
-        self.f_tab = pick_font(r, 9, "bold")
+        self.f_tab = pick_font(r, 9, "bold", family=self.font_cn)
         self.tab_labels = {}
         self.tab_bars = {}
         for key, text in (("pending", "未完成"), ("done", "已完成")):
@@ -1274,7 +1278,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         内置配色没有这些, 就是"不画边框、顶栏底栏跟列表一体";
         自定义配色把它们存在自己身上。
         """
-        defaults = {"scrim_mode": "frost", "radius": 0,
+        defaults = {"font_cn": "", "font_latin": "",
+                    "scrim_mode": "frost", "radius": 0,
                     "border_mode": "none", "border_width": 2,
                     "border_color": "#3b7cf6", "border_color2": "#8a5cf6",
                     "header_split": False, "header_color": "#17181d",
@@ -1286,6 +1291,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         mode = border.get("mode")
         scrim = custom.get("scrim")
         return {
+            "font_cn": custom.get("font_cn") or "",
+            "font_latin": custom.get("font_latin") or "",
             "scrim_mode": scrim if scrim in ("frost", "solid", "off") else "frost",
             "border_mode": mode if mode in ("none", "solid", "gradient") else "none",
             "border_width": max(0, min(8, int(border.get("width") or 2))),
