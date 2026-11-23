@@ -74,6 +74,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._skin_region_size = None
         self._skin_crop_job = None
         self._skin_target = None
+        self._skin_click = None
         self._folded_size = None
         self._skin_source = None
         self._skin_source_path = None
@@ -2045,6 +2046,32 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         found = walk(self.root, x, y)
         return found if found is not None else self.root
 
+    def skin_click_is_double(self, event, target):
+        """判这次按下是不是双击的第二下(皮肤窗口转发用)
+
+        皮肤窗口收到的两次点击是两次独立的 <Button-1>, 靠 Tk 自己的双击判定
+        不稳定, 这里按"同一控件 + 位置差不多 + 时间够近"自己判。
+
+        :param event: 皮肤窗口上的按下事件
+        :param target: 这次要转给哪个控件
+        """
+        now = time.time()
+        last = getattr(self, "_skin_click", None)
+        self._skin_click = (now, event.x_root, event.y_root, target)
+        if last is None:
+            return False
+        if now - last[0] > 0.5:
+            return False
+        if last[3] is not target:
+            return False
+        if abs(event.x_root - last[1]) > 4:
+            return False
+        if abs(event.y_root - last[2]) > 4:
+            return False
+        # 判成双击就把记录清掉, 连点三下不会变成两次双击
+        self._skin_click = None
+        return True
+
     def forward_skin_event(self, event, sequence):
         """把皮肤窗口收到的鼠标事件转给主窗口里的控件
 
@@ -2068,10 +2095,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 self._skin_target = target
             if target is None:
                 return
+            doubled = False
+            if sequence == "<Button-1>":
+                doubled = self.skin_click_is_double(event, target)
             local_x = x - (target.winfo_rootx() - root.winfo_rootx())
             local_y = y - (target.winfo_rooty() - root.winfo_rooty())
+            # 时间戳自己定: 这一下要算双击就贴着上一次(+1ms), 否则拉开
+            # 1000ms。Tk 用 event_generate 的默认时间判双击会误判(实测会把
+            # 相隔几百毫秒的单点并成双击), 这样它就跟我们的判断一致了。
+            stamp = getattr(self, "_skin_event_time", 1000)
+            if sequence == "<Button-1>":
+                stamp += 1 if doubled else 1000
+                self._skin_event_time = stamp
             options = {"x": local_x, "y": local_y,
-                       "rootx": event.x_root, "rooty": event.y_root}
+                       "rootx": event.x_root, "rooty": event.y_root,
+                       "time": stamp}
             delta = getattr(event, "delta", 0)
             if delta:
                 options["delta"] = delta

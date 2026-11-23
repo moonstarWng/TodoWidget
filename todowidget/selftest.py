@@ -90,6 +90,33 @@ def run_selftest():
     settle()
     check("双击弹出便签", bool(app.notes))
 
+    # 皮肤窗口转发双击: 图片皮肤下列表区是透明的, 点击先落在皮肤窗口上,
+    # 那边只有两次独立的 <Button-1>, 得自己判双击再转给列表
+    app.close_note()
+    settle()
+    app.tree.see(target)
+    settle(2)
+    bbox = app.tree.bbox(target)
+    skin_ok = False
+    if bbox:
+        screen_x = app.tree.winfo_rootx() + app.row_content_x(target) + 40
+        screen_y = app.tree.winfo_rooty() + bbox[1] + bbox[3] // 2
+
+        def skin_click():
+            event = FakeEvent(app.root, 0, 0)
+            event.x_root = screen_x
+            event.y_root = screen_y
+            app.forward_skin_event(event, "<Button-1>")
+            app.forward_skin_event(event, "<ButtonRelease-1>")
+
+        skin_click()
+        time.sleep(0.1)
+        settle(2)
+        skin_click()
+        settle()
+        skin_ok = bool(app.notes)
+    check("皮肤窗口转发的双击也能弹出便签", skin_ok)
+
     state = app.notes.get(target_item["id"])
     if state is not None:
         state["text"].insert("1.0", "自检写入的备注")
