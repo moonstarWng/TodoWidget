@@ -275,6 +275,14 @@ def run_selftest():
                 or app.skin_scrim_rect() is not None)
     settle_anim()
     check("展开时磨砂膜马上就在", scrim_ok)
+    # 动画中不允许按窗口大小重设区域(展开时窗口已是最终大小, 一设就把
+    # 整个大窗口放出来, 闪一帧黑窗)
+    before_region = window_region(app.root)
+    app._animating = True
+    app.round_window()
+    after_region = window_region(app.root)
+    app._animating = False
+    check("动画中不按窗口大小重设区域", before_region == after_region)
     check("展开后宽高恢复",
           root.winfo_width() >= 270 and root.winfo_height() >= 220)
     check("展开后列表内容回来", app._body.winfo_ismapped())

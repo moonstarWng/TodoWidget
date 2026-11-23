@@ -3458,7 +3458,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """无边框 + 圆角, 看着像个小组件
 
         动画过程中传当前帧的尺寸进来, 免得 winfo_width 还是上一帧的旧值。
+
+        :param width: 这一帧的宽, 不传就按窗口当前的
+        :param height: 这一帧的高
         """
+        if self._animating and width is None and height is None:
+            # 展开动画里窗口已经是最终大小了, 这时按窗口尺寸设区域会把
+            # 整个大窗口放出来(闪一帧); 每帧的调用会自己传尺寸
+            return
         try:
             w = max(2, int(width or self.root.winfo_width()))
             h = max(2, int(height or self.root.winfo_height()))
