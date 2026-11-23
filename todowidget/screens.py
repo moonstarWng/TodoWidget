@@ -65,6 +65,29 @@ def monitors():
     return items
 
 
+def monitor_for(left, top, right, bottom):
+    """跟这个矩形重叠最多的显示器(工作区)
+
+    :param left: 矩形左边
+    :param top: 矩形上边
+    :param right: 矩形右边
+    :param bottom: 矩形下边
+    :return: (x, y, w, h), 一块都不沾就返回 None
+    """
+    best = None
+    best_area = 0
+    for mx, my, mw, mh in monitors():
+        overlap_w = min(right, mx + mw) - max(left, mx)
+        overlap_h = min(bottom, my + mh) - max(top, my)
+        if overlap_w <= 0 or overlap_h <= 0:
+            continue
+        area = overlap_w * overlap_h
+        if area > best_area:
+            best_area = area
+            best = (mx, my, mw, mh)
+    return best
+
+
 def layout_key():
     """当前屏幕配置的标识(接口/分辨率一变就不一样)"""
     items = monitors()

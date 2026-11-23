@@ -21,7 +21,7 @@ except Exception:
     ImageGrab = None
     ImageTk = None
 
-from . import fonts, paths, updater
+from . import fonts, paths, screens, updater
 from .paths import DATA_DIR
 from .theme import (P, GRADIENTS, THEMES, THEME_NAMES, auto_text_color,
                     best_text_color, mix_color, set_theme)
@@ -109,14 +109,21 @@ class SettingsMixin:
         self.show_settings_tab(current)
 
         width, height = 560, 500
+        monitor = self.current_monitor()
+        mx, my, mw, mh = monitor
         if pos is None:
             # 直接摆到主窗口那块屏幕的正中间
             x, y = self.screen_center(width, height)
         else:
             x, y = pos
-        left, top, right, bottom = self.settings_bounds()
-        x = max(left + 8, min(x, right - width - 8))
-        y = max(top + 8, min(y, bottom - height - 8))
+            # 记住的位置如果落在别的屏幕上(拖过去过 / 换过显示器),
+            # 重新摆回当前屏中间
+            center_x = x + width // 2
+            center_y = y + height // 2
+            if not (mx <= center_x <= mx + mw and my <= center_y <= my + mh):
+                x, y = self.screen_center(width, height)
+        x = max(mx + 8, min(x, mx + mw - width - 8))
+        y = max(my + 8, min(y, my + mh - height - 8))
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
 
         win.bind("<Escape>", lambda ev: self.close_settings())
@@ -169,6 +176,27 @@ class SettingsMixin:
         for widget in (head,):
             widget.bind("<Button-1>", start_move)
             widget.bind("<B1-Motion>", do_move)
+
+    def current_monitor(self):
+        """主窗口所在的那块显示器(工作区)
+
+        :return: (x, y, w, h)
+        """
+        try:
+            left = self.root.winfo_rootx()
+            top = self.root.winfo_rooty()
+            right = left + max(1, self.root.winfo_width())
+            bottom = top + max(1, self.root.winfo_height())
+            found = screens.monitor_for(left, top, right, bottom)
+            if found is not None:
+                return found
+        except Exception as exc:
+            print("current monitor failed:", exc)
+        try:
+            return (0, 0, self.root.winfo_screenwidth(),
+                    self.root.winfo_screenheight())
+        except Exception:
+            return (0, 0, 1920, 1080)
 
     def settings_bounds(self):
         """整个虚拟桌面的范围, 多显示器时也对"""
@@ -1859,12 +1887,10 @@ class SettingsMixin:
         render_preview()
 
         width, height = 710, 620
-        base = self.settings_win or self.root
-        x = base.winfo_rootx() + (base.winfo_width() - width) // 2
-        y = base.winfo_rooty() + (base.winfo_height() - height) // 2
-        left, top, right, bottom = self.settings_bounds()
-        x = max(left + 8, min(x, right - width - 8))
-        y = max(top + 8, min(y, bottom - height - 8))
+        mx, my, mw, mh = self.current_monitor()
+        x, y = self.screen_center(width, height)
+        x = max(mx + 8, min(x, mx + mw - width - 8))
+        y = max(my + 8, min(y, my + mh - height - 8))
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
         win.after(20, lambda w=win: round_corners(w, 12))

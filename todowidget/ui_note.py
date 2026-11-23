@@ -44,18 +44,7 @@ class NoteMixin:
         top = self.root.winfo_rooty()
         right = left + max(1, self.root.winfo_width())
         bottom = top + max(1, self.root.winfo_height())
-        # 跟主窗口重叠最多的那块显示器就是"当前这块"
-        best = None
-        best_area = 0
-        for mx, my, mw, mh in screens.monitors():
-            overlap_w = min(right, mx + mw) - max(left, mx)
-            overlap_h = min(bottom, my + mh) - max(top, my)
-            if overlap_w <= 0 or overlap_h <= 0:
-                continue
-            area = overlap_w * overlap_h
-            if area > best_area:
-                best_area = area
-                best = (mx, my, mw, mh)
+        best = screens.monitor_for(left, top, right, bottom)
         if best is None:
             try:
                 best = (0, 0, self.root.winfo_screenwidth(),

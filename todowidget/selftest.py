@@ -290,6 +290,12 @@ def run_selftest():
     app.conf["geom"] = keep_geom
     app.conf["layouts"] = keep_layouts
 
+    # 设置 / 清单管理 / 配色编辑器都摆在主窗口那块屏的中间
+    mx, my, mw, mh = app.current_monitor()
+    cx, cy = app.screen_center(560, 500)
+    in_monitor = (mx <= cx + 280 <= mx + mw and my <= cy + 250 <= my + mh)
+    check("弹出的窗口摆在当前屏中间", in_monitor)
+
     # 右下角调节柄: 解开时有, 锁住后消失
     app.set_resize_locked(False)
     settle()
