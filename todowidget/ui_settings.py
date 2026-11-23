@@ -922,10 +922,16 @@ class SettingsMixin:
         reset_btn.pack(side="left")
         reset_btn.bind("<Button-1>", lambda ev: reset_view())
 
-        preview = tk.Canvas(image_frame, width=pw, height=ph, bg=P.bg_alt,
+        # 预览对所有模式都显示: 纯色/渐变也能先看效果
+        preview_frame = tk.Frame(form, bg=P.bg)
+        preview_frame.pack(fill="x", pady=(10, 0))
+        preview = tk.Canvas(preview_frame, width=pw, height=ph, bg=P.bg_alt,
                             highlightthickness=1, highlightbackground=P.border,
                             cursor="fleur")
-        preview.pack(anchor="w", pady=(0, 8))
+        preview.pack(anchor="w")
+        preview_hint = tk.Label(preview_frame, text="", bg=P.bg, fg=P.fg_faint,
+                                font=self.f_small, anchor="w")
+        preview_hint.pack(fill="x", pady=(4, 0))
 
         zoom_row = row(image_frame, "缩放", width=6)
         zoom_scale = tk.Scale(zoom_row, from_=100, to=250, resolution=5,
@@ -1354,6 +1360,19 @@ class SettingsMixin:
             bar_rows[key][0].configure(bg=picked)
             refresh_preview()
 
+        def update_hint_text():
+            """预览下面的小提示, 跟着模式变"""
+            if state.get("mode") == "image":
+                text = "拖动挪位置 · 滚轮缩放 · 比例与实际窗口一致"
+            elif state.get("mode") == "gradient":
+                text = "示意图: 渐变底 + 列表底图 + 边框 + 示例行"
+            else:
+                text = "示意图: 纯色底 + 列表底图 + 边框 + 示例行"
+            try:
+                preview_hint.config(text=text)
+            except Exception:
+                pass
+
         def set_mode(key):
             state["mode"] = key
             for chip_key, chip in mode_chips.items():
@@ -1366,14 +1385,13 @@ class SettingsMixin:
             if key == "image":
                 image_frame.pack(fill="x")
                 alpha_row.pack(fill="x")
-                resize_window(735)
-                render_preview()
             elif key == "gradient":
                 gradient_frame.pack(fill="x")
-                resize_window(595)
             else:
                 solid_frame.pack(fill="x")
-                resize_window(545)
+            update_hint_text()
+            render_preview()
+            resize_window()
             if key != "image":
                 alpha_row.pack_forget()
 
@@ -1440,6 +1458,8 @@ class SettingsMixin:
             render_preview()
 
         def preview_wheel(ev):
+            if state.get("mode") != "image":
+                return "break"
             step = 5 if ev.delta > 0 else -5
             value = max(100, min(250, int(round(state["zoom"] * 100)) + step))
             zoom_scale.set(value)
@@ -1608,6 +1628,8 @@ class SettingsMixin:
             preview_drag["y"] = ev.y
 
         def preview_move(ev):
+            if state.get("mode") != "image":
+                return
             if "x" not in preview_drag:
                 return
             span_x, span_y = state.get("_span") or (0, 0)
