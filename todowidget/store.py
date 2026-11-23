@@ -258,6 +258,18 @@ class Store:
                 return True
         return False
 
+    def delete_list_permanent(self, list_id):
+        """彻底删除一个清单(连同里面的任务, 不能恢复)
+
+        :param list_id: 清单 id
+        """
+        keep = [it for it in self.lists if it.get("id") != list_id]
+        if len(keep) == len(self.lists):
+            return False
+        self.lists = keep
+        self.ensure_current()
+        return True
+
     def restore_list(self, list_id):
         """把隐藏 / 删除的清单恢复回来
 

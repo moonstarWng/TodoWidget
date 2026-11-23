@@ -463,6 +463,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.f_tab = pick_font(r, 9, "bold", family=self.font_cn)
         self.f_tab_count = pick_font(r, 8, "normal", family=self.font_cn)
         self.f_switch = pick_font(r, 11, "normal", family=self.font_cn)
+        self.f_switch_on = pick_font(r, 11, "bold", family=self.font_cn)
         self.tab_counts = {"pending": 0, "done": 0}
         self._tab_rects = {}
         self._tab_hover = None
@@ -857,8 +858,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             x += width + gap
         return rects
 
-    def capsule(self, canvas, x0, x1, y0, y1, fill, tag):
-        """在画布上画一个两头圆的胶囊
+    def tab_shape(self, canvas, x0, x1, y0, y1, fill, tag, radius=8):
+        """页签底色: 上面两个角小圆, 下面两个角是直角
 
         :param canvas: 画布
         :param x0: 左边
@@ -867,13 +868,20 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         :param y1: 下边
         :param fill: 填充色
         :param tag: 标签, 方便整组删掉
+        :param radius: 上面的圆角半径
         """
-        radius = (y1 - y0) / 2.0
-        canvas.create_oval(x0, y0, x0 + 2 * radius, y1, fill=fill,
-                           outline="", tags=tag)
-        canvas.create_oval(x1 - 2 * radius, y0, x1, y1, fill=fill,
-                           outline="", tags=tag)
-        canvas.create_rectangle(x0 + radius, y0, x1 - radius, y1, fill=fill,
+        height = max(2, y1 - y0)
+        width = max(2, x1 - x0)
+        radius = max(1, min(radius, height // 2, width // 2))
+        # 上半圆: 两个整圆, 下半截会被中间那块矩形盖住
+        canvas.create_oval(x0, y0, x0 + 2 * radius, y0 + 2 * radius,
+                           fill=fill, outline="", tags=tag)
+        canvas.create_oval(x1 - 2 * radius, y0, x1, y0 + 2 * radius,
+                           fill=fill, outline="", tags=tag)
+        canvas.create_rectangle(x0 + radius, y0, x1 - radius,
+                                y0 + radius, fill=fill, outline="", tags=tag)
+        # 下面这块是方的
+        canvas.create_rectangle(x0, y0 + radius, x1, y1, fill=fill,
                                 outline="", tags=tag)
 
     def paint_tab_pill(self, rect, color=None):
@@ -892,7 +900,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 ratio = 0.28 if self._tab_hover == self.tab else 0.20
                 color = mix_color(self.blank_bg(),
                                   self.tab_accent(self.tab), ratio)
-            self.capsule(canvas, rect[0], rect[1], 6, 30, color, "pill")
+            self.tab_shape(canvas, rect[0], rect[1], 6, 34, color, "pill")
             canvas.tag_lower("pill")
         except Exception:
             pass
@@ -910,8 +918,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             rect = self._tab_rects.get(key)
             if not rect:
                 return
-            self.capsule(canvas, rect[0], rect[1], 6, 30,
-                         mix_color(self.blank_bg(), P.fg, 0.08), "hoverpill")
+            self.tab_shape(canvas, rect[0], rect[1], 6, 34,
+                           mix_color(self.blank_bg(), P.fg, 0.08),
+                           "hoverpill")
             canvas.tag_lower("hoverpill")
         except Exception:
             pass
@@ -939,10 +948,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 else:
                     name_fg = P.fg_dim
                     count_fg = P.fg_faint
-                canvas.create_text(rect[2], 18, text=name, anchor="w",
+                canvas.create_text(rect[2], 20, text=name, anchor="w",
                                    font=self.f_tab, fill=name_fg,
                                    tags=("tabtext", key))
-                canvas.create_text(rect[3], 18,
+                canvas.create_text(rect[3], 20,
                                    text=str(self.tab_counts.get(key, 0)),
                                    anchor="w", font=self.f_tab_count,
                                    fill=count_fg, tags=("tabtext", key))
@@ -1032,11 +1041,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.paint_tab_pill(self._tab_pill)
         self.paint_tab_hover()
         self.paint_tab_texts()
-        try:
-            self.tab_indicator.configure(
-                cursor="hand2" if key else "arrow")
-        except Exception:
-            pass
 
     def make_switch_button(self, symbol, step):
         """做一个清单切换箭头: 平时只有符号, 悬停时亮起来并浮出一圈圆底
@@ -1046,21 +1050,28 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """
         size = 24
         canvas = tk.Canvas(self._tabbar, width=size, height=size, bg=P.bg,
-                           bd=0, highlightthickness=0, cursor="hand2")
+                           bd=0, highlightthickness=0)
+        # 图片皮肤是"抠色透明"的窗口, 没画东西的地方连鼠标事件都收不到。
+        # 先铺一层几乎看不出的圆底, 让整块都能悬停/点击
+        if self.skin_spec() is not None:
+            base = mix_color(self.blank_bg(), P.fg, 0.035)
+            canvas.create_oval(1, 1, size - 1, size - 1, fill=base,
+                               outline="", tags="base")
         text = canvas.create_text(size // 2, size // 2, text=symbol,
                                   fill=P.fg_faint, font=self.f_switch)
 
         def enter(event):
             canvas.delete("halo")
-            halo = mix_color(self.blank_bg(), P.fg, 0.10)
-            canvas.create_oval(1, 1, size - 1, size - 1, fill=halo,
-                               outline="", tags="halo")
-            canvas.tag_lower("halo")
-            canvas.itemconfigure(text, fill=P.fg)
+            fill = mix_color(self.blank_bg(), P.fg, 0.24)
+            ring = mix_color(self.blank_bg(), P.fg, 0.5)
+            canvas.create_oval(1, 1, size - 1, size - 1, fill=fill,
+                               outline=ring, width=1, tags="halo")
+            canvas.tag_lower("halo", text)
+            canvas.itemconfigure(text, fill=P.fg, font=self.f_switch_on)
 
         def leave(event):
             canvas.delete("halo")
-            canvas.itemconfigure(text, fill=P.fg_faint)
+            canvas.itemconfigure(text, fill=P.fg_faint, font=self.f_switch)
 
         canvas.bind("<Enter>", enter)
         canvas.bind("<Leave>", leave)

@@ -327,8 +327,10 @@ class ListMenuMixin:
                 button("隐藏", lambda: self.manager_hide(lst))
         else:
             button("恢复", lambda: self.manager_restore(lst))
-            if kind == "hidden" and len(self.store.visible_lists()) > 0:
+            if kind == "hidden":
                 button("删除", lambda: self.manager_delete(lst))
+            else:
+                button("彻底删除", lambda: self.manager_purge(lst), strong=True)
 
     def count_items(self, lst):
         """清单里有多少条任务(含子任务)
@@ -384,6 +386,22 @@ class ListMenuMixin:
                 parent=self.manage_win):
             return
         self.store.delete_list_soft(lst.get("id"))
+        self.store.save()
+        self.after_list_change()
+
+    def manager_purge(self, lst):
+        """彻底删除(不能恢复)
+
+        :param lst: 清单字典
+        """
+        from tkinter import messagebox
+        name = lst.get("name") or "未命名"
+        if not messagebox.askyesno(
+                "彻底删除",
+                "彻底删除「{}」？\n里面的任务会一起删掉，不能恢复。".format(name),
+                parent=self.manage_win):
+            return
+        self.store.delete_list_permanent(lst.get("id"))
         self.store.save()
         self.after_list_change()
 
