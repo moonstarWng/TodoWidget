@@ -7,6 +7,7 @@
 
 import json
 import os
+import time
 import sqlite3
 import uuid
 from datetime import datetime
@@ -48,6 +49,20 @@ CREATE INDEX IF NOT EXISTS idx_items_list ON items(list_id, parent_id, position)
 def now_str():
     """当前时间, 能用字符串直接排序的格式"""
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _stamp_seconds(value):
+    """'2026-11-05 14:30:00' -> 时间戳; 解析不了就当很久以前
+
+    :param value: 时间字符串
+    """
+    text = str(value or "").strip()
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).timestamp()
+        except Exception:
+            continue
+    return 0.0
 
 
 def day_of(value):
@@ -182,6 +197,12 @@ class Store:
                 "PRAGMA table_info(lists)").fetchall()]
             if "color" not in list_cols:
                 self.conn.execute("ALTER TABLE lists ADD COLUMN color TEXT")
+            if "hidden" not in list_cols:
+                self.conn.execute(
+                    "ALTER TABLE lists ADD COLUMN hidden INTEGER")
+            if "deleted_at" not in list_cols:
+                self.conn.execute(
+                    "ALTER TABLE lists ADD COLUMN deleted_at TEXT")
         except Exception:
             pass
 
@@ -192,6 +213,91 @@ class Store:
             except Exception:
                 pass
             self.conn = None
+
+    def visible_lists(self):
+        """正常显示在界面上的清单(没隐藏、没删除)"""
+        return [it for it in self.lists
+                if not it.get("deleted_at") and not it.get("hidden")]
+
+    def hidden_lists(self):
+        """隐藏起来的清单"""
+        return [it for it in self.lists
+                if it.get("hidden") and not it.get("deleted_at")]
+
+    def deleted_lists(self):
+        """已删除、还在 30 天保留期里的清单"""
+        return [it for it in self.lists if it.get("deleted_at")]
+
+    def set_list_hidden(self, list_id, hidden):
+        """隐藏 / 取消隐藏一个清单
+
+        :param list_id: 清单 id
+        :param hidden: True 隐藏
+        """
+        for item in self.lists:
+            if item.get("id") == list_id:
+                item["hidden"] = bool(hidden)
+                if hidden and self.current == list_id:
+                    self.ensure_current()
+                return True
+        return False
+
+    def delete_list_soft(self, list_id):
+        """删除清单(先留着, 30 天后再真删)
+
+        :param list_id: 清单 id
+        """
+        if len(self.visible_lists()) <= 1:
+            return False
+        for item in self.lists:
+            if item.get("id") == list_id:
+                item["deleted_at"] = now_str()
+                item["hidden"] = False
+                if self.current == list_id:
+                    self.ensure_current()
+                return True
+        return False
+
+    def restore_list(self, list_id):
+        """把隐藏 / 删除的清单恢复回来
+
+        :param list_id: 清单 id
+        """
+        for item in self.lists:
+            if item.get("id") == list_id:
+                item["deleted_at"] = ""
+                item["hidden"] = False
+                return True
+        return False
+
+    def purge_deleted(self, days=30):
+        """清理过了保留期的清单
+
+        :param days: 保留多少天
+        """
+        limit = time.time() - days * 86400
+        keep = []
+        removed = 0
+        for item in self.lists:
+            stamp = item.get("deleted_at") or ""
+            if stamp and _stamp_seconds(stamp) < limit:
+                removed += 1
+                continue
+            keep.append(item)
+        if removed:
+            self.lists = keep
+            self.ensure_current()
+        return removed
+
+    def ensure_current(self):
+        """当前清单不可用时切到第一个能用的"""
+        visible = self.visible_lists()
+        pool = visible or self.lists
+        if not pool:
+            return
+        ids = [item.get("id") for item in pool]
+        if self.current not in ids:
+            self.current = ids[0]
 
     def ensure_list_colors(self):
         """老库或新建的清单补上自动配色"""
@@ -209,7 +315,8 @@ class Store:
         self.connect()
 
         rows = self.conn.execute(
-            "SELECT id, name, color FROM lists ORDER BY position").fetchall()
+            "SELECT id, name, color, hidden, deleted_at FROM lists"
+            " ORDER BY position").fetchall()
         if rows:
             self._load_rows(rows)
             return
@@ -236,9 +343,13 @@ class Store:
         roots = {}
         for index, row in enumerate(list_rows):
             list_id, name, color = row[0], row[1], row[2]
+            hidden = bool(row[3]) if len(row) > 3 else False
+            deleted_at = row[4] if len(row) > 4 else ""
             if not color:
                 color = LIST_COLORS[index % len(LIST_COLORS)]
-            node = {"id": list_id, "name": name, "color": color, "items": []}
+            node = {"id": list_id, "name": name, "color": color,
+                    "hidden": hidden, "deleted_at": deleted_at or "",
+                    "items": []}
             self.lists.append(node)
             roots[list_id] = node["items"]
 
@@ -299,9 +410,12 @@ class Store:
             conn.execute("DELETE FROM items")
             conn.execute("DELETE FROM lists")
             for pos, lst in enumerate(self.lists):
-                conn.execute("INSERT INTO lists(id, name, position, color)"
-                             " VALUES(?, ?, ?, ?)",
-                             (lst["id"], lst["name"], pos, lst.get("color")))
+                conn.execute(
+                    "INSERT INTO lists(id, name, position, color, hidden,"
+                    " deleted_at) VALUES(?, ?, ?, ?, ?, ?)",
+                    (lst["id"], lst["name"], pos, lst.get("color"),
+                     1 if lst.get("hidden") else 0,
+                     lst.get("deleted_at") or ""))
                 self._save_items(conn, lst["id"], None, lst["items"])
             conn.execute("INSERT OR REPLACE INTO meta(key, value)"
                          " VALUES('current', ?)", (self.current,))

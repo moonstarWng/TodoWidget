@@ -145,6 +145,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.normalize()
         self.refresh()
         folded = bool(self.conf.get("collapsed"))
+        # 删掉的清单保留 30 天, 过期的清掉
+        if self.store.purge_deleted(30):
+            self.store.save()
         self.apply_window()
         if folded:
             self.set_folded(True, animate=False)
@@ -346,6 +349,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._list_paint_job = None
         self._menu_open = False
         self._screen_key = ""
+        self._tab_tween = None
         self._drag_target = None
         self._drag_job = None
         self._main_region_size = None
@@ -450,40 +454,33 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.pbar.place(x=0, y=0, relheight=1, relwidth=0)
 
         # ---- 未完成 / 已完成 两个页签 ----
-        tabbar = tk.Frame(card, bg=P.bg, height=34)
+        # 整个页签区是一块画布: 底色、圆角药丸、文字都自己画,
+        # 这样才做得出"药丸滑过去 + 悬停变亮"的效果
+        tabbar = tk.Frame(card, bg=P.bg, height=36)
         tabbar.pack(fill="x", side="top")
         tabbar.pack_propagate(False)
         self._tabbar = tabbar
         self.f_tab = pick_font(r, 9, "bold", family=self.font_cn)
-        self.tab_labels = {}
-        self.tab_bars = {}
-        for key, text in (("pending", "未完成"), ("done", "已完成")):
-            cell = tk.Frame(tabbar, bg=P.bg, cursor="hand2")
-            cell.pack(side="left", padx=(12, 6), pady=(6, 0))
-            lbl = tk.Label(cell, text=text, bg=P.bg, fg=P.fg_dim,
-                           font=self.f_tab, cursor="hand2")
-            lbl.pack()
-            bar = tk.Frame(cell, bg=P.bg, height=2)
-            bar.pack(fill="x", pady=(4, 0))
-            for w in (cell, lbl):
-                w.bind("<Button-1>", lambda e, k=key: self.set_tab(k))
-            self.tab_labels[key] = lbl
-            self.tab_bars[key] = bar
+        self.f_tab_count = pick_font(r, 8, "normal", family=self.font_cn)
+        self.f_switch = pick_font(r, 11, "normal", family=self.font_cn)
+        self.tab_counts = {"pending": 0, "done": 0}
+        self._tab_rects = {}
+        self._tab_hover = None
+        self._tab_pill = None
+        self._tab_pill_key = None
+        self._tab_tween = None
+        self.tab_indicator = tk.Canvas(tabbar, bg=P.bg, bd=0,
+                                       highlightthickness=0, cursor="arrow")
+        self.tab_indicator.place(x=0, y=0, relwidth=1, relheight=1)
+        self.tab_indicator.bind("<Button-1>", self.on_tab_click)
+        self.tab_indicator.bind("<Motion>", self.on_tab_motion)
+        self.tab_indicator.bind("<Leave>", lambda ev: self.set_tab_hover(None))
 
-        # 清单切换按钮: 静置只有符号, 悬停变亮; 清单少于两个时藏起来
-        self.btn_next_list = tk.Label(tabbar, text=">", bg=P.bg, fg=P.fg_faint,
-                                      font=self.f_group, padx=6, pady=0,
-                                      cursor="hand2")
-        self.btn_prev_list = tk.Label(tabbar, text="<", bg=P.bg, fg=P.fg_faint,
-                                      font=self.f_group, padx=6, pady=0,
-                                      cursor="hand2")
-        for btn, step in ((self.btn_next_list, 1), (self.btn_prev_list, -1)):
-            btn.pack(side="right", padx=(0, 4), pady=(3, 0))
-            btn.bind("<Button-1>", lambda ev, s=step: self.cycle_list(s))
-            btn.bind("<Enter>",
-                     lambda ev, w=btn: self.hover_list_switch(w, True))
-            btn.bind("<Leave>",
-                     lambda ev, w=btn: self.hover_list_switch(w, False))
+        # 清单切换按钮: 平时只有符号, 悬停出现一圈淡淡的圆底
+        self.btn_next_list = self.make_switch_button("\u203a", 1)
+        self.btn_prev_list = self.make_switch_button("\u2039", -1)
+        for btn in (self.btn_next_list, self.btn_prev_list):
+            btn.pack(side="right", padx=(0, 4), pady=(6, 0))
 
         def start_drag(e):
             self._drag_from = (e.x_root, e.y_root)
@@ -832,23 +829,253 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.save_conf()
         self.refresh()
 
-    def update_tabs(self, done, total):
+    def tab_accent(self, key):
+        """这个页签自己的强调色(已完成用绿色)
+
+        :param key: pending / done
+        """
+        if key == "done":
+            return T.TAB_COLORS.get("done") or P.accent
+        return P.accent
+
+    def tab_layout(self):
+        """算每个页签的位置: 药丸范围 + 文字起始点
+
+        :return: {key: (药物左, 药丸右, 名字 x, 数字 x)}
+        """
+        rects = {}
+        gap = 6
+        pad = 12
+        x = 10
+        for key, name in (("pending", "\u672a\u5b8c\u6210"),
+                          ("done", "\u5df2\u5b8c\u6210")):
+            name_w = self.f_tab.measure(name)
+            count_w = self.f_tab_count.measure(
+                str(self.tab_counts.get(key, 0)))
+            width = pad * 2 + name_w + 6 + count_w
+            rects[key] = (x, x + width, x + pad, x + pad + name_w + 6)
+            x += width + gap
+        return rects
+
+    def capsule(self, canvas, x0, x1, y0, y1, fill, tag):
+        """在画布上画一个两头圆的胶囊
+
+        :param canvas: 画布
+        :param x0: 左边
+        :param x1: 右边
+        :param y0: 上边
+        :param y1: 下边
+        :param fill: 填充色
+        :param tag: 标签, 方便整组删掉
+        """
+        radius = (y1 - y0) / 2.0
+        canvas.create_oval(x0, y0, x0 + 2 * radius, y1, fill=fill,
+                           outline="", tags=tag)
+        canvas.create_oval(x1 - 2 * radius, y0, x1, y1, fill=fill,
+                           outline="", tags=tag)
+        canvas.create_rectangle(x0 + radius, y0, x1 - radius, y1, fill=fill,
+                                outline="", tags=tag)
+
+    def paint_tab_pill(self, rect, color=None):
+        """画当前页签的药丸底
+
+        :param rect: (左, 右)
+        :param color: 底色; 默认按当前页签取
+        """
+        canvas = getattr(self, "tab_indicator", None)
+        if canvas is None or not rect:
+            return
         try:
-            self.tab_labels["pending"].config(
-                text="未完成 {}".format(total - done))
-            self.tab_labels["done"].config(
-                text="已完成 {}".format(done))
-            pending_color = P.accent
-            done_color = T.TAB_COLORS.get("done") or P.accent
-            self.tab_labels["pending"].config(
-                fg=pending_color if self.tab == "pending" else P.fg_dim)
-            self.tab_labels["done"].config(
-                fg=done_color if self.tab == "done" else P.fg_dim)
-            empty = self.empty_bar_bg()
-            self.tab_bars["pending"].config(
-                bg=pending_color if self.tab == "pending" else empty)
-            self.tab_bars["done"].config(
-                bg=done_color if self.tab == "done" else empty)
+            self._tab_pill = (rect[0], rect[1])
+            canvas.delete("pill")
+            if color is None:
+                ratio = 0.28 if self._tab_hover == self.tab else 0.20
+                color = mix_color(self.blank_bg(),
+                                  self.tab_accent(self.tab), ratio)
+            self.capsule(canvas, rect[0], rect[1], 6, 30, color, "pill")
+            canvas.tag_lower("pill")
+        except Exception:
+            pass
+
+    def paint_tab_hover(self):
+        """悬停在未选中的页签上时, 下面给一层很淡的底"""
+        canvas = getattr(self, "tab_indicator", None)
+        if canvas is None:
+            return
+        try:
+            canvas.delete("hoverpill")
+            key = self._tab_hover
+            if not key or key == self.tab:
+                return
+            rect = self._tab_rects.get(key)
+            if not rect:
+                return
+            self.capsule(canvas, rect[0], rect[1], 6, 30,
+                         mix_color(self.blank_bg(), P.fg, 0.08), "hoverpill")
+            canvas.tag_lower("hoverpill")
+        except Exception:
+            pass
+
+    def paint_tab_texts(self):
+        """重画两个页签上的文字(名字 + 数量)"""
+        canvas = getattr(self, "tab_indicator", None)
+        if canvas is None:
+            return
+        try:
+            canvas.delete("tabtext")
+            for key, name in (("pending", "\u672a\u5b8c\u6210"),
+                              ("done", "\u5df2\u5b8c\u6210")):
+                rect = self._tab_rects.get(key)
+                if not rect:
+                    continue
+                active = (key == self.tab)
+                base = self.tab_accent(key)
+                if active:
+                    name_fg = base
+                    count_fg = mix_color(base, self.blank_bg(), 0.30)
+                elif key == self._tab_hover:
+                    name_fg = P.fg
+                    count_fg = P.fg_dim
+                else:
+                    name_fg = P.fg_dim
+                    count_fg = P.fg_faint
+                canvas.create_text(rect[2], 18, text=name, anchor="w",
+                                   font=self.f_tab, fill=name_fg,
+                                   tags=("tabtext", key))
+                canvas.create_text(rect[3], 18,
+                                   text=str(self.tab_counts.get(key, 0)),
+                                   anchor="w", font=self.f_tab_count,
+                                   fill=count_fg, tags=("tabtext", key))
+        except Exception:
+            pass
+
+    def redraw_tabs(self):
+        """整块页签重画: 悬停底 + 药丸 + 文字, 切换时药丸滑过去"""
+        canvas = getattr(self, "tab_indicator", None)
+        if canvas is None:
+            return
+        previous = self._tab_pill
+        previous_key = self._tab_pill_key
+        self._tab_rects = self.tab_layout()
+        target = self._tab_rects.get(self.tab)
+        if target is None:
+            return
+        pill = (target[0], target[1])
+        self._tab_pill = pill
+        changed = previous_key is not None and previous_key != self.tab
+        if not changed and getattr(self, "_tab_tween", None) is not None:
+            self._tab_tween.stop()
+            self._tab_tween = None
+        self._tab_pill_key = self.tab
+        try:
+            canvas.delete("all")
+        except Exception:
+            return
+        self.paint_tab_hover()
+        self.paint_tab_pill(previous if changed and previous else pill)
+        self.paint_tab_texts()
+        if changed and previous:
+            self.slide_tab_pill(previous, pill)
+
+    def slide_tab_pill(self, start, target):
+        """药丸从旧页签滑到新页签
+
+        :param start: 起点 (左, 右)
+        :param target: 终点 (左, 右)
+        """
+        tween = getattr(self, "_tab_tween", None)
+        if tween is not None:
+            tween.stop()
+        self._tab_tween = Tween(
+            self.root, 0.18,
+            on_frame=lambda p: self.paint_tab_pill((
+                start[0] + (target[0] - start[0]) * p,
+                start[1] + (target[1] - start[1]) * p)),
+            on_done=lambda: setattr(self, "_tab_tween", None),
+            easing=ease_in_out_cubic)
+        self._tab_tween.start()
+
+    def tab_at(self, x):
+        """鼠标 x 落在哪个页签上
+
+        :param x: 画布坐标
+        """
+        for key, rect in self._tab_rects.items():
+            if rect[0] <= x <= rect[1]:
+                return key
+        return None
+
+    def on_tab_click(self, event):
+        """点页签
+
+        :param event: 鼠标事件
+        """
+        key = self.tab_at(event.x)
+        if key is not None:
+            self.set_tab(key)
+
+    def on_tab_motion(self, event):
+        """鼠标在页签区移动, 更新悬停状态
+
+        :param event: 鼠标事件
+        """
+        self.set_tab_hover(self.tab_at(event.x))
+
+    def set_tab_hover(self, key):
+        """设置当前悬停的页签
+
+        :param key: 页签名或 None
+        """
+        if key == self._tab_hover:
+            return
+        self._tab_hover = key
+        self.paint_tab_pill(self._tab_pill)
+        self.paint_tab_hover()
+        self.paint_tab_texts()
+        try:
+            self.tab_indicator.configure(
+                cursor="hand2" if key else "arrow")
+        except Exception:
+            pass
+
+    def make_switch_button(self, symbol, step):
+        """做一个清单切换箭头: 平时只有符号, 悬停时亮起来并浮出一圈圆底
+
+        :param symbol: 显示的符号
+        :param step: 1 下一个 / -1 上一个
+        """
+        size = 24
+        canvas = tk.Canvas(self._tabbar, width=size, height=size, bg=P.bg,
+                           bd=0, highlightthickness=0, cursor="hand2")
+        text = canvas.create_text(size // 2, size // 2, text=symbol,
+                                  fill=P.fg_faint, font=self.f_switch)
+
+        def enter(event):
+            canvas.delete("halo")
+            halo = mix_color(self.blank_bg(), P.fg, 0.10)
+            canvas.create_oval(1, 1, size - 1, size - 1, fill=halo,
+                               outline="", tags="halo")
+            canvas.tag_lower("halo")
+            canvas.itemconfigure(text, fill=P.fg)
+
+        def leave(event):
+            canvas.delete("halo")
+            canvas.itemconfigure(text, fill=P.fg_faint)
+
+        canvas.bind("<Enter>", enter)
+        canvas.bind("<Leave>", leave)
+        canvas.bind("<Button-1>", lambda ev: self.cycle_list(step))
+        return canvas
+
+    def update_tabs(self, done, total):
+        """刷新两个页签上的数量
+
+        :param done: 已完成条数
+        :param total: 总条数
+        """
+        try:
+            self.tab_counts = {"pending": max(0, total - done), "done": done}
+            self.redraw_tabs()
         except Exception:
             pass
 
@@ -2037,12 +2264,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return P.bg
         return self.skin_key()
 
-    def empty_bar_bg(self):
-        """页签下面那条细条"未选中"时的颜色"""
-        if self.panel_solid():
-            return self.panel_color()
-        return self.blank_bg()
-
     def apply_panel_mode(self):
         """按三档模式决定列表区怎么画
 
@@ -2605,6 +2826,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         m = tk.Menu(self.root, tearoff=0)
         m.add_command(label="设置…", command=self.open_settings)
         m.add_separator()
+        m.add_command(label="清单管理…", command=self.open_list_manager)
         m.add_command(label="把窗口摆回屏幕里", command=self.reset_position)
         m.add_command(label="显示 / 隐藏", command=self.hide)
         m.add_separator()
