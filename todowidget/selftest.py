@@ -11,6 +11,29 @@ from .store import Store, new_item
 from .utils import FakeEvent, TkApp
 
 
+# 自检要看的 Delphi 源码位置(可用环境变量 TUBEPRO_TRUNK 覆盖), 找不到就跳过源码检查
+TUBEPRO_TRUNK = os.environ.get(
+    "TUBEPRO_TRUNK",
+    r"D:\Code\NC\CurrentWork\04_TubePro\TubePro_trunk2",
+)
+
+
+def read_source(path):
+    """读 GBK / UTF-8 源码文本, 文件不存在返回空串
+
+    :param path: 源码文件路径
+    """
+    if not os.path.exists(path):
+        return ""
+    for encoding in ("utf-8", "gbk"):
+        try:
+            with open(path, encoding=encoding) as f:
+                return f.read()
+        except UnicodeDecodeError:
+            continue
+    return ""
+
+
 def window_region(widget):
     """窗口现在设了裁剪区域没有(0 = 没有)
 
@@ -254,6 +277,19 @@ def run_selftest():
     check("统计文字按宽度自动显示/隐藏", wide_shown and narrow_hidden)
     check("展开后标题变回清单名", app.lbl_title.cget("text") != "待办清单")
 
+    # 换配色会重建整个界面: 不能把窗口挪回"上次保存的位置"
+    keep_geom = app.conf.get("geom")
+    keep_layouts = dict(app.conf.get("layouts") or {})
+    app.conf["geom"] = "300x460+40+40"
+    app.conf["layouts"] = {}
+    before_pos = (root.winfo_x(), root.winfo_y(), root.winfo_width())
+    app.reload_ui()
+    settle(18)
+    after_pos = (root.winfo_x(), root.winfo_y(), root.winfo_width())
+    check("换配色重建界面后窗口位置不变", before_pos == after_pos)
+    app.conf["geom"] = keep_geom
+    app.conf["layouts"] = keep_layouts
+
     # 右下角调节柄: 解开时有, 锁住后消失
     app.set_resize_locked(False)
     settle()
@@ -343,6 +379,22 @@ def run_selftest():
     app.sort_mode = "manual"
     app.refresh()
     settle()
+
+    # BUGFIX#102911 线激光寻中降级重试日志: 寻中开始和每次降级重试都要带轨迹序号
+    seek_dir = os.path.join(TUBEPRO_TRUNK, "CAM", "TPSeekModule")
+    seek_stat = read_source(os.path.join(seek_dir, "SeekHelp",
+                                         "uSeekCenterStat.pas"))
+    seek_strs = read_source(os.path.join(seek_dir, "SeekStrs.pas"))
+    if seek_stat and seek_strs:
+        check("寻中开始日志带轨迹序号和句柄",
+              "SLLSeekTraceHandle, [GetTraceIdx, FTraceHandle]" in seek_stat
+              and "寻中开始，轨迹序号" in seek_strs)
+        check("降级重试统一打印轨迹序号",
+              "LogTraceInfo;" in seek_stat
+              and "线激光轨迹序号" in seek_strs)
+        check("轨迹序号按句柄反查且失败有日志",
+              "TryCurveByHandle" in seek_stat
+              and "SLLSeekTraceResolveFailed" in seek_stat)
 
     root.destroy()
     try:

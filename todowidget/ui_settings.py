@@ -2249,6 +2249,9 @@ class SettingsMixin:
     def reload_ui(self):
         """配色变了就整块重建界面, 省得一个个去改颜色"""
         self.finish_edit()
+        # 重建会按"上次保存的几何"重新摆窗口, 不先把当前位置存下来的话
+        # 窗口会跳回之前的位置(用户刚拖到别处就会看到它自己跑回去)
+        self.save_geom()
         pinned_ids = []
         for note_id, state in self.notes.items():
             if state.get("pinned"):
