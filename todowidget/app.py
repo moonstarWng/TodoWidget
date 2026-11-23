@@ -36,6 +36,14 @@ from .ui_settings import SettingsMixin
 SKIN_KEY = "#010203"
 
 
+class _SkinPoint:
+    """转发双击时用的轻量"事件", 处理函数只需要 x / y"""
+
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+
+
 class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
               ListPaintMixin):
     """主窗口(按功能拆在几个 Mixin 里)"""
@@ -2072,6 +2080,31 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._skin_click = None
         return True
 
+    def dispatch_skin_double(self, target, x, y, event):
+        """皮肤窗口判出双击后, 直接把双击动作跑掉
+
+        Tk 不会把皮肤窗口里 event_generate 出去的两次按下算成双击
+        (实测 <Double-1> 一次都不触发), 所以这里按控件直接调处理函数。
+
+        :param target: 双击落在哪个控件
+        :param x: 控件内横坐标
+        :param y: 控件内纵坐标
+        :param event: 皮肤窗口上的原始事件(取屏幕坐标用)
+        """
+        tree = getattr(self, "tree", None)
+        if target is not None and target is tree:
+            self.on_double_click(_SkinPoint(x, y))
+            return
+        for widget in (getattr(self, "_head", None),
+                       getattr(self, "head_bg", None)):
+            if widget is not None and target is widget:
+                self.toggle_collapse_all()
+                return
+        # 其它控件没有专门的双击动作, 发个事件让它自己的绑定处理
+        if target is not None:
+            target.event_generate("<Double-Button-1>", x=x, y=y,
+                                  rootx=event.x_root, rooty=event.y_root)
+
     def forward_skin_event(self, event, sequence):
         """把皮肤窗口收到的鼠标事件转给主窗口里的控件
 
@@ -2100,20 +2133,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 doubled = self.skin_click_is_double(event, target)
             local_x = x - (target.winfo_rootx() - root.winfo_rootx())
             local_y = y - (target.winfo_rooty() - root.winfo_rooty())
-            # 时间戳自己定: 这一下要算双击就贴着上一次(+1ms), 否则拉开
-            # 1000ms。Tk 用 event_generate 的默认时间判双击会误判(实测会把
-            # 相隔几百毫秒的单点并成双击), 这样它就跟我们的判断一致了。
-            stamp = getattr(self, "_skin_event_time", 1000)
-            if sequence == "<Button-1>":
-                stamp += 1 if doubled else 1000
-                self._skin_event_time = stamp
             options = {"x": local_x, "y": local_y,
-                       "rootx": event.x_root, "rooty": event.y_root,
-                       "time": stamp}
+                       "rootx": event.x_root, "rooty": event.y_root}
             delta = getattr(event, "delta", 0)
             if delta:
                 options["delta"] = delta
             target.event_generate(sequence, **options)
+            if doubled:
+                self.dispatch_skin_double(target, local_x, local_y, event)
             if sequence == "<ButtonRelease-1>":
                 self._skin_target = None
         except Exception:
