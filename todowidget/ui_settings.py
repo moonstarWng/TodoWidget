@@ -25,6 +25,7 @@ from . import fonts, paths, screens, updater
 from .paths import DATA_DIR
 from .theme import (P, GRADIENTS, THEMES, THEME_NAMES, auto_text_color,
                     best_text_color, mix_color, set_theme)
+from .shadow import attach_shadow
 from .utils import make_icon, round_corners
 
 # 设置窗口里各分类
@@ -129,6 +130,8 @@ class SettingsMixin:
         win.bind("<Escape>", lambda ev: self.close_settings())
         win.deiconify()
         win.after(30, lambda w=win: round_corners(w, 12))
+        self._settings_shadow = attach_shadow(win, radius=12, blur=16,
+                                              strength=0.45)
         win.lift()
         win.focus_force()
         if scroll_pos:
@@ -220,6 +223,10 @@ class SettingsMixin:
         win = self.settings_win
         self.settings_win = None
         self._settings_chips = {}
+        shadow = getattr(self, "_settings_shadow", None)
+        self._settings_shadow = None
+        if shadow is not None:
+            shadow.destroy()
         if win is not None:
             try:
                 win.grab_release()
@@ -1897,6 +1904,8 @@ class SettingsMixin:
         y = max(my + 8, min(y, my + mh - height - 8))
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
+        self._editor_shadow = attach_shadow(win, radius=12, blur=16,
+                                            strength=0.45)
         win.after(20, lambda w=win: round_corners(w, 12))
         win.after(30, fit_height)
         win.lift()
@@ -1913,6 +1922,10 @@ class SettingsMixin:
         """关掉配色编辑框"""
         win = getattr(self, "theme_editor", None)
         self.theme_editor = None
+        shadow = getattr(self, "_editor_shadow", None)
+        self._editor_shadow = None
+        if shadow is not None:
+            shadow.destroy()
         if win is not None:
             try:
                 win.grab_release()
@@ -2282,6 +2295,11 @@ class SettingsMixin:
         # 重建会按"上次保存的几何"重新摆窗口, 不先把当前位置存下来的话
         # 窗口会跳回之前的位置(用户刚拖到别处就会看到它自己跑回去)
         self.save_geom()
+        # 主窗口的阴影也跟着重建: 下面会把所有顶层窗口都销毁掉
+        main_shadow = getattr(self, "_main_shadow", None)
+        self._main_shadow = None
+        if main_shadow is not None:
+            main_shadow.destroy()
         pinned_ids = []
         for note_id, state in self.notes.items():
             if state.get("pinned"):

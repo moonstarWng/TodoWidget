@@ -23,6 +23,7 @@ from .paths import DATA_DIR
 from .store import walk as _walk
 from .theme import P
 from . import screens
+from .shadow import attach_shadow
 from .utils import open_url, round_corners
 
 LINK_RE = re.compile(r"(?:https?://|www\.)[^\s<>\"'\u3000]+")
@@ -219,6 +220,8 @@ class NoteMixin:
             pos = self.screen_center(width, height)
         win.geometry("{}x{}+{}+{}".format(width, height, pos[0], pos[1]))
         win.lift()
+        state["shadow"] = attach_shadow(win, radius=14, blur=16,
+                                        strength=0.4)
         win.after(30, lambda w=win: round_corners(w, 14))
         self._note_opened_at = time.time()
         self.update_note_pin_button(state)
@@ -919,6 +922,10 @@ class NoteMixin:
         elif raw:
             content = raw.strip()
 
+        shadow = state.get("shadow")
+        state["shadow"] = None
+        if shadow is not None:
+            shadow.destroy()
         try:
             win.destroy()
         except Exception:

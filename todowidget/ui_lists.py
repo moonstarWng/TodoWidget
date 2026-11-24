@@ -10,6 +10,7 @@ except Exception:
     Image = None
 
 from . import theme as T
+from .shadow import attach_shadow
 from .theme import P, best_text_color, hex_to_rgb, mix_color
 from .utils import round_corners
 
@@ -203,6 +204,8 @@ class ListMenuMixin:
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
         self.fit_manager_height(center=True)
+        self._manage_shadow = attach_shadow(win, radius=12, blur=16,
+                                            strength=0.45)
         win.lift()
         try:
             win.grab_set()
@@ -213,6 +216,10 @@ class ListMenuMixin:
         """关掉清单管理窗口"""
         win = getattr(self, "manage_win", None)
         self.manage_win = None
+        shadow = getattr(self, "_manage_shadow", None)
+        self._manage_shadow = None
+        if shadow is not None:
+            shadow.destroy()
         if win is None:
             return
         try:

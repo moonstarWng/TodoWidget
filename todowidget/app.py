@@ -3297,6 +3297,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     self.push_layered_skin(self._skin_image)
                 elif self._skin_surface != size:
                     self.refresh_layered_surface(size[0], size[1])
+            self.sync_main_shadow(size[0], size[1], int(x), int(y))
         except Exception:
             pass
 
@@ -3341,6 +3342,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 user32.EndDeferWindowPos(batch)
                 if skin:
                     self._skin_geom = (width, height, x, y)
+                self.sync_main_shadow(width, height, x, y)
             else:
                 user32.SetWindowPos(main, 0, x, y, width, height,
                                     no_zorder | no_activate)
@@ -3482,6 +3484,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
             if not hwnd:
                 return
+            if self._animating:
+                self.sync_main_shadow(w, h)
             actual = (self.root.winfo_width(), self.root.winfo_height())
             if (not force and self._skin_layered and not self._animating
                     and actual == size):
@@ -3626,6 +3630,36 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.round_window()
         self.save_geom()
 
+    def make_main_shadow(self):
+        """给主窗口建一个跟着走的阴影"""
+        try:
+            from .shadow import WindowShadow
+        except Exception as exc:
+            print("shadow import failed:", exc)
+            return None
+        shadow = getattr(self, "_main_shadow", None)
+        if shadow is None:
+            shadow = WindowShadow(self.root, radius=self.corner_radius(),
+                                  blur=16, strength=0.5)
+            shadow.create()
+            self._main_shadow = shadow
+        else:
+            shadow.radius = self.corner_radius()
+        return shadow
+
+    def sync_main_shadow(self, width=None, height=None, x=None, y=None):
+        """主窗口的阴影跟着几何走
+
+        :param width: 可见宽, 不传按窗口的
+        :param height: 可见高
+        :param x: 屏幕横坐标
+        :param y: 屏幕纵坐标
+        """
+        shadow = getattr(self, "_main_shadow", None)
+        if shadow is None:
+            return
+        shadow.sync(width, height, x, y)
+
     def apply_window(self):
         r = self.root
         r.withdraw()
@@ -3652,6 +3686,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             r.geometry("330x460+{}+{}".format(sw - 370, max(70, sh // 10)))
         r.deiconify()
         r.lift()
+        self.make_main_shadow()
+        self.sync_main_shadow()
         self.apply_resize_state()
         if skin is not None:
             self.make_skin()
@@ -3740,11 +3776,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return
         self.root.withdraw()
         self.sync_skin()
+        shadow = getattr(self, "_main_shadow", None)
+        if shadow is not None:
+            shadow.hide()
 
     def show(self):
         self.root.deiconify()
         self.root.lift()
         self.sync_skin()
+        self.sync_main_shadow()
         try:
             self.root.focus_force()
             self.raise_notes()
@@ -3817,6 +3857,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.refresh()
 
     def quit(self):
+        shadow = getattr(self, "_main_shadow", None)
+        self._main_shadow = None
+        if shadow is not None:
+            shadow.destroy()
         self.stop_title_fade()
         self.close_settings()
         self.destroy_skin()
