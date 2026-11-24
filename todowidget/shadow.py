@@ -392,7 +392,20 @@ class WindowShadow:
         owner = owner or self.owner
         pending = {"job": None}
 
+        def is_owner(event):
+            """这个事件是不是窗口自己的
+
+            子控件的 <Configure>/<Map>/<Unmap> 也会冒到顶层窗口的绑定上,
+            不挡掉的话里面翻页、重排都会把阴影重推一遍(看着两个窗口一起闪),
+            面板一收(<Unmap>)还会把阴影整个收掉。
+            """
+            if event is None:
+                return True
+            return getattr(event, "widget", None) is owner
+
         def sync_later(event=None):
+            if not is_owner(event):
+                return
             if self.win is None or pending["job"] is not None:
                 return
             pending["job"] = owner.after(16, run_sync)
@@ -401,9 +414,14 @@ class WindowShadow:
             pending["job"] = None
             self.sync()
 
+        def on_unmap(event=None):
+            if not is_owner(event):
+                return
+            self.hide()
+
         owner.bind("<Configure>", sync_later, add="+")
-        owner.bind("<Map>", lambda event: sync_later(), add="+")
-        owner.bind("<Unmap>", lambda event: self.hide(), add="+")
+        owner.bind("<Map>", sync_later, add="+")
+        owner.bind("<Unmap>", on_unmap, add="+")
         owner.after(30, sync_later)
 
     def hide(self):

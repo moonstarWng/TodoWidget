@@ -477,6 +477,37 @@ def run_selftest():
     edge = shadow_image(120, 80, 10, 8, 0.5)
     edge_alpha = max(edge.getpixel((0, y))[3] for y in range(edge.size[1]))
     check("阴影外圈没被切出硬边", edge_alpha == 0)
+
+    # 回归: 子控件的 <Configure>/<Unmap> 会冒到顶层窗口的绑定上。以前设置窗口
+    # 翻页、面板收起都会把阴影反复收掉/重推, 看着就是主界面和设置一起闪。
+    app.open_settings()
+    settle(8)
+    from .shadow import WindowShadow
+    saved_hide = WindowShadow.hide
+    hide_count = {"n": 0}
+
+    def counting_hide(instance):
+        hide_count["n"] += 1
+        return saved_hide(instance)
+
+    WindowShadow.hide = counting_hide
+    try:
+        for tab in ("sort", "window", "look"):
+            app.show_settings_tab(tab)
+            settle(4)
+    finally:
+        WindowShadow.hide = saved_hide
+    check("翻设置页不会把阴影收掉", hide_count["n"] == 0)
+
+    # 窗口自己真藏起来时, 阴影还是要跟着收
+    root.withdraw()
+    settle(6)
+    hid = shadow is None or shadow.win is None or shadow.win.state() != "normal"
+    root.deiconify()
+    settle(8)
+    check("窗口藏起来时阴影跟着收", hid)
+    app.close_settings()
+    settle(4)
     root.geometry("336x476")
     settle(20)
     followed = False
