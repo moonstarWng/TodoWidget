@@ -3411,6 +3411,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             user32.SetWindowPos(hwnd, self.main_hwnd(), 0, 0, 0, 0, flags)
         except Exception:
             pass
+        # 皮肤排好之后把阴影再压到皮肤下面(不然它会夹在中间蒙住背景)
+        shadow = getattr(self, "_main_shadow", None)
+        if shadow is not None:
+            shadow.restack()
 
     def clip_skin(self, width, height):
         """把皮肤窗口的显示区域裁到指定大小(动画每帧用)
@@ -3638,6 +3642,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.round_window()
         self.save_geom()
 
+    def shadow_anchor(self):
+        """阴影应该压在哪个窗口下面
+
+        有皮肤窗口时要压到皮肤下面: 皮肤才是整个窗口的底图, 阴影夹在主窗口
+        和皮肤之间就会蒙在背景上(看着像阴影浮在上面), 拖动时还会一闪一闪。
+        """
+        return self.skin_hwnd() or self.main_hwnd()
+
     def make_main_shadow(self):
         """给主窗口建一个跟着走的阴影"""
         try:
@@ -3653,7 +3665,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if self.render_spec() is None:
                 card = P.bg
             shadow = WindowShadow(self.root, radius=self.corner_radius(),
-                                  blur=8, strength=0.5, card=card)
+                                  blur=8, strength=0.5, card=card,
+                                  anchor=self.shadow_anchor)
             shadow.create()
             shadow.follow(self.root)
             self._main_shadow = shadow

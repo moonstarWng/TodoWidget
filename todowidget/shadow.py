@@ -96,6 +96,17 @@ def _api():
     return user32, gdi32
 
 
+def shadow_pad(blur):
+    """阴影图四周要留多少白
+
+    高斯模糊的尾巴有好几倍 sigma, 留白不够就会在图片边界上被一刀切,
+    看着就是阴影外圈有一条硬边。
+
+    :param blur: 扩散强度
+    """
+    return max(4, int(round(float(blur) * 3)))
+
+
 def _rgba(color, alpha=255):
     """颜色字符串转 RGBA 元组
 
@@ -122,7 +133,8 @@ def shadow_image(width, height, radius, blur, strength, card=None, ring=None,
     """
     if Image is None:
         return None
-    pad = max(2, int(blur))
+    pad = shadow_pad(blur)
+    sigma = max(1.0, float(blur) * 0.7)
     total_w = width + pad * 2
     total_h = height + pad * 2 + max(0, int(offset))
     mask = Image.new("L", (total_w, total_h), 0)
@@ -131,7 +143,7 @@ def shadow_image(width, height, radius, blur, strength, card=None, ring=None,
         [pad, pad + max(0, int(offset)), pad + width - 1,
          pad + height - 1 + max(0, int(offset))],
         radius=max(1, int(radius)), fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(pad * 0.75))
+    mask = mask.filter(ImageFilter.GaussianBlur(sigma))
     alpha = mask.point(lambda value: int(value * max(0.0, min(1.0, strength))))
     layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 255))
     layer.putalpha(alpha)
@@ -169,8 +181,11 @@ class WindowShadow:
     """
 
     def __init__(self, owner, radius=12, blur=8, strength=0.5,
-                 card=None, ring=None, offset=5):
+                 card=None, ring=None, offset=5, anchor=None):
         self.owner = owner
+        # anchor: 返回"阴影要压在哪个窗口下面"的函数; 主窗口还有一层皮肤窗口,
+        # 阴影必须排到皮肤下面, 夹在中间就会把整块阴影蒙在窗口背景上
+        self.anchor = anchor
         self.radius = int(radius)
         self.blur = int(blur)
         self.strength = float(strength)
@@ -247,7 +262,7 @@ class WindowShadow:
                                    None if quick else self.card)
         if image is None:
             return
-        pad = self.blur
+        pad = shadow_pad(self.blur)
         try:
             # 先显示出来: 藏着的顶层窗口还没有包装窗口, 拿不到句柄就推不上去
             if win.state() != "normal":
@@ -255,7 +270,10 @@ class WindowShadow:
                 win.update_idletasks()
             self._apply_style()
             if not self._push(image, x - pad, y - pad):
-                win.withdraw()
+                # 推失败时别把已经显示出来的阴影收掉(会一闪一闪),
+                # 只有从来没成功显示过才藏起来, 免得露出黑底
+                if not self._shown:
+                    win.withdraw()
                 return
             topmost = bool(owner.attributes("-topmost"))
             if bool(win.attributes("-topmost")) != topmost:
@@ -336,6 +354,10 @@ class WindowShadow:
             print("shadow push failed:", exc)
             return False
 
+    def restack(self):
+        """把阴影重新压到该在的位置(皮肤窗口重新排过之后要补一次)"""
+        self._stack_below()
+
     def _stack_below(self):
         """把阴影压到窗口下面(紧贴着它)"""
         try:
@@ -343,8 +365,18 @@ class WindowShadow:
             win = self.win
             owner = self.owner
             shadow = user32.GetParent(win.winfo_id())
-            target = user32.GetParent(owner.winfo_id())
+            target = 0
+            if self.anchor is not None:
+                try:
+                    target = self.anchor() or 0
+                except Exception:
+                    target = 0
+            if not target:
+                target = user32.GetParent(owner.winfo_id())
             if not shadow or not target:
+                return
+            # 已经紧挨着它下面就不用再排: 反复 SetWindowPos 会让它重画/闪
+            if user32.GetWindow(target, 2) == shadow:
                 return
             no_activate = 0x0010
             user32.SetWindowPos(shadow, target, 0, 0, 0, 0,
@@ -411,7 +443,7 @@ def _premultiplied(image):
 
 
 def attach_shadow(owner, radius=12, blur=8, strength=0.5, card=None,
-                  ring=None):
+                  ring=None, anchor=None):
     """给一个窗口挂上阴影, 位置/大小变了自动跟着走
 
     :param owner: 目标窗口
@@ -420,10 +452,12 @@ def attach_shadow(owner, radius=12, blur=8, strength=0.5, card=None,
     :param strength: 不透明度
     :param card: 卡片填充色(补圆角的抗锯齿边)
     :param ring: 卡片描边色
+    :param anchor: 返回"阴影要压在哪个窗口下面"的函数
     :return: WindowShadow 实例(失败返回 None)
     """
     shadow = WindowShadow(owner, radius=radius, blur=blur,
-                          strength=strength, card=card, ring=ring)
+                          strength=strength, card=card, ring=ring,
+                          anchor=anchor)
     shadow.create()
     if shadow.win is None:
         return None

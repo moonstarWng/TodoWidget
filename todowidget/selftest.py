@@ -458,6 +458,25 @@ def run_selftest():
           shadow is not None and shadow.win is not None)
     check("阴影只大一小圈并往下偏",
           shadow is not None and shadow.blur <= 10 and shadow.offset >= 3)
+    # 阴影必须压在整个窗口下面(有皮肤窗口就压到皮肤下面)。夹在中间时阴影
+    # 会蒙在窗口背景上, 看着像"阴影浮在上面", 拖动时还会一闪一闪
+    shadow_down = False
+    if shadow is not None and shadow.win is not None:
+        import ctypes as _ct
+        _user32 = _ct.windll.user32
+        _user32.GetParent.restype = _ct.c_void_p
+        _user32.GetParent.argtypes = [_ct.c_void_p]
+        _user32.GetWindow.restype = _ct.c_void_p
+        _user32.GetWindow.argtypes = [_ct.c_void_p, _ct.c_uint]
+        sh_hwnd = _user32.GetParent(shadow.win.winfo_id())
+        above = app.skin_hwnd() or app.main_hwnd()
+        shadow_down = _user32.GetWindow(above, 2) == sh_hwnd
+    check("阴影压在窗口(含皮肤)下面", shadow_down)
+    # 模糊尾巴不能被图片边界切掉, 不然阴影外圈有一条硬边
+    from .shadow import shadow_image
+    edge = shadow_image(120, 80, 10, 8, 0.5)
+    edge_alpha = max(edge.getpixel((0, y))[3] for y in range(edge.size[1]))
+    check("阴影外圈没被切出硬边", edge_alpha == 0)
     root.geometry("336x476")
     settle(20)
     followed = False
