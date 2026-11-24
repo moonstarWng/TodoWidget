@@ -3690,6 +3690,24 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 shadow._image_size = None
         return shadow
 
+    def begin_reveal(self):
+        """显示时先只露圆角背景: 把内容摘下来, 过一会儿再贴上去
+
+        顺序是 背景 → 内容 → 阴影, 换配色/启动时就不会糊成一团。
+        """
+        try:
+            self.inner.pack_forget()
+        except Exception:
+            pass
+
+    def reveal_content(self):
+        """把内容贴回来(这时圆角背景已经在屏幕上了)"""
+        try:
+            pad = self.border_pad()
+            self.inner.pack(fill="both", expand=True, padx=pad, pady=pad)
+        except Exception:
+            pass
+
     def resume_main_shadow(self):
         """收起/展开动画收尾: 几何生效之后让阴影按最终尺寸现身"""
         if self._animating:
@@ -3761,6 +3779,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         else:
             sw, sh = r.winfo_screenwidth(), r.winfo_screenheight()
             r.geometry("330x460+{}+{}".format(sw - 370, max(70, sh // 10)))
+        # 先只露圆角背景, 内容 45ms 后再贴上来
+        self.begin_reveal()
         r.deiconify()
         r.lift()
         self.make_main_shadow()
@@ -3773,6 +3793,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.destroy_skin()
         if not self.topmost:
             r.after(150, self.sink)
+        r.after(45, self.reveal_content)
         r.after(60, self.round_window)
         r.after(80, self.sync_skin)
         # 底图摆好之后再让阴影现身(换配色时最明显: 不会先看到一个空影子)
@@ -3860,12 +3881,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.sync_skin()
 
     def show(self):
+        self.begin_reveal()
         self.root.deiconify()
         self.root.lift()
         self.sync_skin()
         # 阴影最后出现: 先挂起, 等窗口画好再显示
         self.hide_main_shadow()
-        self.root.after(60, self.resume_main_shadow)
+        self.root.after(45, self.reveal_content)
+        self.root.after(75, self.resume_main_shadow)
         try:
             self.root.focus_force()
             self.raise_notes()
