@@ -56,7 +56,7 @@ class SettingsMixin:
         win.withdraw()
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg=P.border)
+        win.configure(bg=P.bg)
         self.settings_win = win
         self._settings_chips = {}
         self._settings_panels = {}
@@ -130,8 +130,8 @@ class SettingsMixin:
         win.bind("<Escape>", lambda ev: self.close_settings())
         win.deiconify()
         win.after(30, lambda w=win: round_corners(w, 12))
-        self._settings_shadow = attach_shadow(win, radius=12, blur=16,
-                                              strength=0.45)
+        self._settings_shadow = attach_shadow(win, radius=12, card=P.bg,
+                                              ring=P.border)
         win.lift()
         win.focus_force()
         if scroll_pos:
@@ -870,7 +870,7 @@ class SettingsMixin:
         win.withdraw()
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg=P.border)
+        win.configure(bg=P.bg)
         self.theme_editor = win
 
         body = tk.Frame(win, bg=P.bg)
@@ -1904,8 +1904,8 @@ class SettingsMixin:
         y = max(my + 8, min(y, my + mh - height - 8))
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
-        self._editor_shadow = attach_shadow(win, radius=12, blur=16,
-                                            strength=0.45)
+        self._editor_shadow = attach_shadow(win, radius=12, card=P.bg,
+                                            ring=P.border)
         win.after(20, lambda w=win: round_corners(w, 12))
         win.after(30, fit_height)
         win.lift()

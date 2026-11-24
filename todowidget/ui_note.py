@@ -210,7 +210,9 @@ class NoteMixin:
         win.bind("<Control-v>", lambda ev, s=state: self.paste_into_note(s))
         text.bind("<Double-Button-1>", self.note_image_double_click)
         text.bind("<Button-1>", self.note_image_click, add="+")
-        win.bind("<Configure>", lambda ev, s=state: self.round_note(s))
+        # 用 add="+": 阴影也在 <Configure> 上挂着, 直接 bind 会把它顶掉
+        win.bind("<Configure>", lambda ev, s=state: self.round_note(s),
+                 add="+")
 
         self.make_note_grips(win, state)
 
@@ -220,8 +222,10 @@ class NoteMixin:
             pos = self.screen_center(width, height)
         win.geometry("{}x{}+{}+{}".format(width, height, pos[0], pos[1]))
         win.lift()
-        state["shadow"] = attach_shadow(win, radius=14, blur=16,
-                                        strength=0.4)
+        # 卡片跟边框同色: 区域切出来的台阶跟边框一个颜色, 再被卡片的
+        # 抗锯齿圆弧盖住, 圆角处的边框就接上了
+        state["shadow"] = attach_shadow(win, radius=14, card=P.note_edge,
+                                        strength=0.45)
         win.after(30, lambda w=win: round_corners(w, 14))
         self._note_opened_at = time.time()
         self.update_note_pin_button(state)
@@ -378,15 +382,21 @@ class NoteMixin:
                 pass
 
     def make_note_grips(self, win, state):
-        """无边框窗口自己实现右下角/右边/下边的拉伸"""
-        grip_color = P.note_edge
+        """无边框窗口自己实现右下角/右边/下边的拉伸
+
+        把手用内容底色, 并且让开最外 1px, 这样边框是连着的;
+        以前用边框色铺满 4px, 铺到圆角那儿就成了一块方色块。
+        """
+        grip_color = P.note_bg
+        edge = 1
 
         right = tk.Frame(win, bg=grip_color, cursor="sb_h_double_arrow")
-        right.place(relx=1.0, x=-4, y=0, relheight=1.0, width=4)
+        right.place(relx=1.0, x=-(4 + edge), y=0, relheight=1.0, width=4)
         bottom = tk.Frame(win, bg=grip_color, cursor="sb_v_double_arrow")
-        bottom.place(relx=0, rely=1.0, y=-4, relwidth=1.0, height=4)
+        bottom.place(relx=0, rely=1.0, y=-(4 + edge), relwidth=1.0, height=4)
         corner = tk.Frame(win, bg=grip_color, cursor="sizing")
-        corner.place(relx=1.0, rely=1.0, x=-14, y=-14, width=14, height=14)
+        corner.place(relx=1.0, rely=1.0, x=-(13 + edge), y=-(13 + edge),
+                     width=13, height=13)
 
         for widget, mode in ((right, "e"), (bottom, "s"), (corner, "se")):
             widget.bind("<Button-1>",

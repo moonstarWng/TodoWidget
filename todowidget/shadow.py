@@ -96,30 +96,67 @@ def _api():
     return user32, gdi32
 
 
-def shadow_image(width, height, radius, blur, strength):
-    """生成一张带模糊圆角的阴影图(RGBA)
+def _rgba(color, alpha=255):
+    """颜色字符串转 RGBA 元组
+
+    :param color: #rrggbb
+    :param alpha: 不透明度
+    """
+    from .theme import hex_to_rgb
+    red, green, blue = hex_to_rgb(color)
+    return (red, green, blue, int(alpha))
+
+
+def shadow_image(width, height, radius, blur, strength, card=None, ring=None,
+                 offset=2):
+    """生成一张带模糊圆角的阴影图(RGBA), 可以再叠一张抗锯齿的卡片
 
     :param width: 窗口宽
     :param height: 窗口高
     :param radius: 窗口圆角半径
     :param blur: 模糊半径(也就是四周留白的宽度)
-    :param strength: 不透明度 0~1
+    :param strength: 影子不透明度 0~1
+    :param card: 卡片填充色(跟窗口底色一样), 不传就不画
+    :param ring: 卡片描边色(跟窗口边框一样), 不传就不描
+    :param offset: 影子往下偏多少像素, 看着更像浮起来
     """
     if Image is None:
         return None
     pad = max(2, int(blur))
     total_w = width + pad * 2
-    total_h = height + pad * 2 + 2
+    total_h = height + pad * 2 + max(0, int(offset))
     mask = Image.new("L", (total_w, total_h), 0)
     drawer = ImageDraw.Draw(mask)
     drawer.rounded_rectangle(
-        [pad, pad + 2, pad + width - 1, pad + height - 1],
+        [pad, pad + max(0, int(offset)), pad + width - 1,
+         pad + height - 1 + max(0, int(offset))],
         radius=max(1, int(radius)), fill=255)
-    mask = mask.filter(ImageFilter.GaussianBlur(pad * 0.7))
+    mask = mask.filter(ImageFilter.GaussianBlur(pad * 0.75))
     alpha = mask.point(lambda value: int(value * max(0.0, min(1.0, strength))))
     layer = Image.new("RGBA", (total_w, total_h), (0, 0, 0, 255))
     layer.putalpha(alpha)
-    return layer
+    if card is None:
+        return layer
+    # 卡片: 超采样几倍再缩回来, 圆角才没有锯齿。
+    # 填色往外扩 1px(圆角也 +1): 窗口自己的圆角是 1 位区域切的, 边缘那一排
+    # 像素会顶到弧线外面; 卡片大一圈才盖得住这些台阶
+    over = 3
+    big = Image.new("RGBA", (total_w * over, total_h * over),
+                    (0, 0, 0, 0))
+    painter = ImageDraw.Draw(big)
+    pad2 = max(1, pad - 1)
+    fill_box = [pad2 * over, pad2 * over, (pad + width) * over,
+                (pad + height) * over]
+    painter.rounded_rectangle(
+        fill_box, radius=(max(1, int(radius)) + 1) * over,
+        fill=_rgba(card))
+    if ring:
+        box = [pad * over, pad * over, (pad + width) * over - 1,
+               (pad + height) * over - 1]
+        painter.rounded_rectangle(box, radius=max(1, int(radius)) * over,
+                                  outline=_rgba(ring), width=over)
+    card_layer = big.resize((total_w, total_h), Image.LANCZOS)
+    return Image.alpha_composite(layer, card_layer)
 
 
 class WindowShadow:
@@ -131,11 +168,14 @@ class WindowShadow:
     :param strength: 不透明度 0~1
     """
 
-    def __init__(self, owner, radius=12, blur=14, strength=0.5):
+    def __init__(self, owner, radius=12, blur=18, strength=0.55,
+                 card=None, ring=None):
         self.owner = owner
         self.radius = int(radius)
         self.blur = int(blur)
         self.strength = float(strength)
+        self.card = card
+        self.ring = ring
         self.win = None
         self._image_size = None
         self._image = None
@@ -174,13 +214,14 @@ class WindowShadow:
         except Exception as exc:
             print("shadow style failed:", exc)
 
-    def sync(self, width=None, height=None, x=None, y=None):
+    def sync(self, width=None, height=None, x=None, y=None, quick=False):
         """按窗口当前位置/大小摆好阴影
 
         :param width: 指定的宽, 不传就用窗口的
         :param height: 指定的高
         :param x: 指定的屏幕横坐标
         :param y: 指定的屏幕纵坐标
+        :param quick: 动画每帧用: 不画抗锯齿卡片(画一次要 20 多毫秒, 会拖慢动画)
         """
         owner = self.owner
         win = self.win
@@ -201,35 +242,43 @@ class WindowShadow:
         except Exception as exc:
             print("shadow sync failed:", exc)
             return
-        image = self._cached_image(width, height)
+        image = self._cached_image(width, height,
+                                   None if quick else self.card)
         if image is None:
             return
         pad = self.blur
         try:
+            # 先显示出来: 藏着的顶层窗口还没有包装窗口, 拿不到句柄就推不上去
+            if win.state() != "normal":
+                win.deiconify()
+                win.update_idletasks()
+            self._apply_style()
             if not self._push(image, x - pad, y - pad):
+                win.withdraw()
                 return
             topmost = bool(owner.attributes("-topmost"))
             if bool(win.attributes("-topmost")) != topmost:
                 win.attributes("-topmost", topmost)
-            if win.state() != "normal":
-                win.deiconify()
             self._shown = True
             self._stack_below()
         except Exception as exc:
             print("shadow show failed:", exc)
 
-    def _cached_image(self, width, height):
+    def _cached_image(self, width, height, card="keep"):
         """按窗口大小缓存阴影图(拖动时别每帧重算模糊)
 
         :param width: 窗口宽
         :param height: 窗口高
+        :param card: 卡片颜色, 传 None 就是这张不画卡片
         """
+        if card == "keep":
+            card = self.card
         key = (int(width), int(height), self.radius, self.blur,
-               round(self.strength, 3))
+               round(self.strength, 3), card, self.ring)
         if key == self._image_size and self._image is not None:
             return self._image
         image = shadow_image(width, height, self.radius, self.blur,
-                             self.strength)
+                             self.strength, card, self.ring)
         if image is None:
             return None
         self._image_size = key
@@ -302,6 +351,28 @@ class WindowShadow:
         except Exception as exc:
             print("shadow stack failed:", exc)
 
+    def follow(self, owner=None):
+        """让阴影跟着窗口的位置/大小/显示状态自动同步
+
+        :param owner: 要跟的窗口, 不传就用建的时候那个
+        """
+        owner = owner or self.owner
+        pending = {"job": None}
+
+        def sync_later(event=None):
+            if self.win is None or pending["job"] is not None:
+                return
+            pending["job"] = owner.after(16, run_sync)
+
+        def run_sync():
+            pending["job"] = None
+            self.sync()
+
+        owner.bind("<Configure>", sync_later, add="+")
+        owner.bind("<Map>", lambda event: sync_later(), add="+")
+        owner.bind("<Unmap>", lambda event: self.hide(), add="+")
+        owner.after(30, sync_later)
+
     def hide(self):
         """藏起来(跟着窗口收起/隐藏)"""
         win = self.win
@@ -338,33 +409,22 @@ def _premultiplied(image):
     return Image.merge("RGBA", (blue, green, red, alpha)).tobytes()
 
 
-def attach_shadow(owner, radius=12, blur=14, strength=0.5):
+def attach_shadow(owner, radius=12, blur=18, strength=0.55, card=None,
+                  ring=None):
     """给一个窗口挂上阴影, 位置/大小变了自动跟着走
 
     :param owner: 目标窗口
     :param radius: 圆角半径
     :param blur: 阴影扩散范围
     :param strength: 不透明度
+    :param card: 卡片填充色(补圆角的抗锯齿边)
+    :param ring: 卡片描边色
     :return: WindowShadow 实例(失败返回 None)
     """
     shadow = WindowShadow(owner, radius=radius, blur=blur,
-                          strength=strength)
+                          strength=strength, card=card, ring=ring)
     shadow.create()
     if shadow.win is None:
         return None
-    pending = {"job": None}
-
-    def sync_later(event=None):
-        if pending["job"] is not None:
-            return
-        pending["job"] = owner.after(16, run_sync)
-
-    def run_sync():
-        pending["job"] = None
-        shadow.sync()
-
-    owner.bind("<Configure>", sync_later, add="+")
-    owner.bind("<Map>", lambda event: sync_later(), add="+")
-    owner.bind("<Unmap>", lambda event: shadow.hide(), add="+")
-    owner.after(30, sync_later)
+    shadow.follow(owner)
     return shadow

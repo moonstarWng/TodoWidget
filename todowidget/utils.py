@@ -116,8 +116,17 @@ def enable_acrylic(window, tint=(24, 26, 32, 205), state=4):
         return False
 
 
+# 区域往里缩多少: 窗口自己的圆角是 1 位掩码切的, 边缘那几像素会顶到
+# 弧线外面; 缩进去以后, 外面那张同色抗锯齿卡片才是看着的边
+CORNER_INSET = 1
+
+
 def round_corners(window, radius=12):
-    """给无边框窗口切圆角"""
+    """给无边框窗口切圆角
+
+    :param window: 目标窗口
+    :param radius: 圆角半径
+    """
     try:
         user32 = ctypes.windll.user32
         gdi32 = ctypes.windll.gdi32
@@ -126,8 +135,10 @@ def round_corners(window, radius=12):
             hwnd = window.winfo_id()
         width = max(2, window.winfo_width())
         height = max(2, window.winfo_height())
-        region = gdi32.CreateRoundRectRgn(0, 0, width + 1, height + 1,
-                                          radius * 2, radius * 2)
+        inset = CORNER_INSET
+        region = gdi32.CreateRoundRectRgn(
+            inset, inset, max(inset + 1, width - inset),
+            max(inset + 1, height - inset), radius * 2, radius * 2)
         user32.SetWindowRgn(hwnd, region, True)
         return True
     except Exception:

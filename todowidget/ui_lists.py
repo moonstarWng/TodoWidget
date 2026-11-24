@@ -135,7 +135,7 @@ class ListMenuMixin:
         win.withdraw()
         win.overrideredirect(True)
         win.attributes("-topmost", True)
-        win.configure(bg=P.border)
+        win.configure(bg=P.bg)
         self.manage_win = win
 
         body = tk.Frame(win, bg=P.bg)
@@ -204,8 +204,8 @@ class ListMenuMixin:
         win.geometry("{}x{}+{}+{}".format(width, height, x, y))
         win.deiconify()
         self.fit_manager_height(center=True)
-        self._manage_shadow = attach_shadow(win, radius=12, blur=16,
-                                            strength=0.45)
+        self._manage_shadow = attach_shadow(win, radius=12, card=P.bg,
+                                            ring=P.border)
         win.lift()
         try:
             win.grab_set()

@@ -8,6 +8,7 @@ from . import screens, updater
 from .app import TodoApp
 from .paths import APP_DIR, CONF_FILE
 from .store import Store, new_item
+from .theme import P
 from .utils import FakeEvent, TkApp
 
 
@@ -422,6 +423,48 @@ def run_selftest():
     app.sort_mode = "manual"
     app.refresh()
     settle()
+
+    # 便签: 圆角处的边框不能断。窗口底色和阴影卡片都用边框色, 1 位区域
+    # 切出来的台阶才会被同色抗锯齿圆弧盖住
+    app.simulate_double_click(target)
+    settle(10)
+    state = app.notes.get(target_item["id"])
+    note_bg = ""
+    note_card = None
+    if state is not None:
+        note_bg = str(state["win"].cget("bg")).lower()
+        note_card = getattr(state.get("shadow"), "card", None)
+    check("便签的边框色连到圆角上",
+          note_bg == str(P.note_edge).lower()
+          and note_card is not None
+          and str(note_card).lower() == str(P.note_edge).lower())
+    app.close_note()
+    settle()
+
+    # 圆角不能跟着边框粗细缩: 3px 边框以前会把圆角压成 3px, 看着像直角
+    saved_border = (app.border_mode, app.border_width)
+    app.border_mode, app.border_width = "none", 0
+    plain_radius = app.corner_radius()
+    app.border_mode, app.border_width = "solid", 3
+    thick_radius = app.corner_radius()
+    app.border_mode, app.border_width = saved_border
+    check("边框粗细不影响圆角", plain_radius == thick_radius)
+
+    # 主窗口的阴影要跟着窗口走。以前只有改动时显式同步一次, 拖动/改大小
+    # 之后阴影就落在原地, 看着像没有阴影
+    settle()
+    shadow = getattr(app, "_main_shadow", None)
+    check("主窗口挂了阴影窗口",
+          shadow is not None and shadow.win is not None)
+    root.geometry("336x476")
+    settle(20)
+    followed = False
+    if shadow is not None and shadow._image_size is not None:
+        followed = tuple(shadow._image_size[:2]) == (root.winfo_width(),
+                                                    root.winfo_height())
+    check("阴影跟着窗口改大小", followed)
+    root.geometry("330x460")
+    settle(10)
 
     # BUGFIX#102911 线激光寻中降级重试日志: 寻中开始和每次降级重试都要带轨迹序号
     seek_dir = os.path.join(TUBEPRO_TRUNK, "CAM", "TPSeekModule")

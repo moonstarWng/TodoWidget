@@ -1692,6 +1692,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
+            # 动画帧为了速度没画抗锯齿卡片, 收尾补一张完整的
+            self.sync_main_shadow()
             done()
 
         self._animating = True
@@ -1726,6 +1728,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
+            # 动画帧为了速度没画抗锯齿卡片, 收尾补一张完整的
+            self.sync_main_shadow()
             done()
 
         self._animating = True
@@ -2733,15 +2737,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
     def corner_radius(self):
         """窗口圆角半径
 
-        配色里没指定就自动: 有边框时等于边框粗细 —— 卡片是方的, 圆角一旦比
-        边框粗, 卡片直角就会盖住边框内沿, 拐角处的带子会变细。
+        边框只是在圆角里再画一圈, 不再让圆角跟着边框粗细缩 —— 以前 3px
+        的边框会把圆角压成 3px, 看着几乎成了直角。没指定就固定 10px。
         """
         custom = int(getattr(self, "radius", 0) or 0)
         if custom > 0:
             return max(2, min(14, custom))
-        if not self.border_active():
-            return 10
-        return max(2, min(10, int(self.border_width)))
+        return 10
 
     def border_active(self):
         """是不是要画边框"""
@@ -3499,8 +3501,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if self._main_region_size == size:
                 return
             radius = self.corner_radius() * 2
+            # 纯色主题: 区域往里缩 1px, 外面那圈交给同色卡片的抗锯齿圆角
+            inset = 0
+            shadow = getattr(self, "_main_shadow", None)
+            if shadow is not None and shadow.card:
+                inset = 1
             rgn = ctypes.windll.gdi32.CreateRoundRectRgn(
-                0, 0, w + 1, h + 1, radius, radius)
+                inset, inset, max(inset + 1, w - inset),
+                max(inset + 1, h - inset), radius, radius)
             if ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True):
                 self._main_region_size = size
             else:
@@ -3639,12 +3647,22 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return None
         shadow = getattr(self, "_main_shadow", None)
         if shadow is None:
+            # 纯色主题没有皮肤窗口垫底, 用同色卡片把被 1 位区域切掉的圆角
+            # 补成抗锯齿边; 皮肤主题已经有 alpha 圆角, 不需要卡片
+            card = None
+            if self.render_spec() is None:
+                card = P.bg
             shadow = WindowShadow(self.root, radius=self.corner_radius(),
-                                  blur=16, strength=0.5)
+                                  blur=18, strength=0.55, card=card)
             shadow.create()
+            shadow.follow(self.root)
             self._main_shadow = shadow
         else:
             shadow.radius = self.corner_radius()
+            card = P.bg if self.render_spec() is None else None
+            if card != shadow.card:
+                shadow.card = card
+                shadow._image_size = None
         return shadow
 
     def sync_main_shadow(self, width=None, height=None, x=None, y=None):
@@ -3658,7 +3676,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         shadow = getattr(self, "_main_shadow", None)
         if shadow is None:
             return
-        shadow.sync(width, height, x, y)
+        shadow.sync(width, height, x, y, quick=bool(self._animating))
 
     def apply_window(self):
         r = self.root
