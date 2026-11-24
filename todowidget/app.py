@@ -1697,6 +1697,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             done()
 
         self._animating = True
+        # 阴影先退场: 跟着每帧缩放的影子会漏出一帧(大影子还留在原地),
+        # 收完再按最终尺寸一次性摆好
+        self.hide_main_shadow()
         tick()
 
     def animate_reveal(self, start_w, start_h, target_w, target_h, done):
@@ -1733,6 +1736,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             done()
 
         self._animating = True
+        self.hide_main_shadow()
         # 先把可见区域压回横条大小, 再从这一帧开始放
         self.round_window(max(1, start_w), max(1, start_h))
         tick()
@@ -1909,6 +1913,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if getattr(self, "_drag", None):
             # 拖窗口时只有位置在变, 大小/皮肤都由 apply_window_rect 逐帧处理了
             return
+        # 排 z 序也会让 Windows 发 WM_WINDOWPOSCHANGED, Tk 一律当成 <Configure>。
+        # 位置大小都没变就别再排同步, 否则会 "同步 → 排 z 序 → 又来事件" 死循环
+        cfg = (e.width, e.height, e.x, e.y)
+        if cfg == getattr(self, "_last_cfg", None):
+            return
+        self._last_cfg = cfg
         # 等事件处理完再按真实窗口大小同步, 免得用到过期的事件尺寸(会闪一帧大窗口)
         # 动画期间尺寸由动画自己裁, 这里不插手
         if self.skin_win is not None and not self._animating:
@@ -3678,6 +3688,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 shadow._image_size = None
         return shadow
 
+    def hide_main_shadow(self):
+        """收起/展开动画开始时先让阴影退场"""
+        shadow = getattr(self, "_main_shadow", None)
+        if shadow is not None:
+            shadow.hide()
+
     def sync_main_shadow(self, width=None, height=None, x=None, y=None):
         """主窗口的阴影跟着几何走
 
@@ -3686,10 +3702,13 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         :param x: 屏幕横坐标
         :param y: 屏幕纵坐标
         """
+        if self._animating:
+            # 收起/展开动画期间阴影已经退场, 别每帧又把它摆回来(会漏影子)
+            return
         shadow = getattr(self, "_main_shadow", None)
         if shadow is None:
             return
-        shadow.sync(width, height, x, y, quick=bool(self._animating))
+        shadow.sync(width, height, x, y)
 
     def apply_window(self):
         r = self.root

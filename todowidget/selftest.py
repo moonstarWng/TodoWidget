@@ -478,6 +478,44 @@ def run_selftest():
     edge_alpha = max(edge.getpixel((0, y))[3] for y in range(edge.size[1]))
     check("阴影外圈没被切出硬边", edge_alpha == 0)
 
+    # 回归: 排 z 序会让 Windows 发冗余的 WM_WINDOWPOSCHANGED, Tk 一律当成
+    # <Configure>。位置/大小没变时若还重推图层, 就会自己追自己(每秒 30 圈,
+    # 设置窗口整块反复重画, CPU 打满)
+    no_repush = False
+    if shadow is not None and shadow.win is not None:
+        saved_push = shadow._push
+        push_count = {"n": 0}
+
+        def counting_push(image, x, y):
+            push_count["n"] += 1
+            return saved_push(image, x, y)
+
+        shadow._push = counting_push
+        try:
+            shadow.sync()
+            shadow.sync()
+        finally:
+            shadow._push = saved_push
+        no_repush = push_count["n"] <= 1
+    check("阴影没变化时不重复推图层", no_repush)
+
+    # 收起动画: 阴影要先退场, 不然会漏出一帧没跟着缩小的影子
+    settle()
+    app.set_folded(True, animate=True)
+    hidden_during = True
+    while app._fold_job is not None:
+        if shadow is not None and shadow.win is not None:
+            if shadow.win.state() == "normal":
+                hidden_during = False
+        root.update()
+        time.sleep(0.005)
+    settle(10)
+    back_again = (shadow is not None and shadow.win is not None
+                  and shadow.win.state() == "normal")
+    check("收起时阴影先退场再按最终尺寸回来", hidden_during and back_again)
+    app.set_folded(False, animate=False)
+    settle(12)
+
     # 回归: 子控件的 <Configure>/<Unmap> 会冒到顶层窗口的绑定上。以前设置窗口
     # 翻页、面板收起都会把阴影反复收掉/重推, 看着就是主界面和设置一起闪。
     app.open_settings()

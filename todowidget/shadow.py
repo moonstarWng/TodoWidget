@@ -196,6 +196,7 @@ class WindowShadow:
         self._image_size = None
         self._image = None
         self._shown = False
+        self._last_rect = None
 
     def create(self):
         """先把阴影窗口建出来(还没显示)"""
@@ -262,10 +263,24 @@ class WindowShadow:
                                    None if quick else self.card)
         if image is None:
             return
+        # 位置/大小/内容都没变就别再推一遍图层。Windows 的 z 序变化也会发
+        # WM_WINDOWPOSCHANGED, Tk 一律当成 <Configure>, 不挡住的话
+        # "同步 → 排 z 序 → 又来 <Configure> → 再同步" 会自己追自己
+        rect = (int(width), int(height), int(x), int(y), bool(quick),
+                id(image))
+        try:
+            shown = self._shown and win.state() == "normal"
+        except Exception:
+            shown = False
+        if rect == self._last_rect and shown:
+            self._stack_below()
+            return
         pad = shadow_pad(self.blur)
         try:
-            # 先显示出来: 藏着的顶层窗口还没有包装窗口, 拿不到句柄就推不上去
+            # 先摆到目标位置再显示: 刚建出来的顶层窗口默认 200x200 在 (0,0),
+            # 直接 deiconify 会在屏幕左上角闪一块黑的; 先缩成 1x1 再推图层
             if win.state() != "normal":
+                win.geometry("1x1+{}+{}".format(int(x) - pad, int(y) - pad))
                 win.deiconify()
                 win.update_idletasks()
             self._apply_style()
@@ -279,6 +294,7 @@ class WindowShadow:
             if bool(win.attributes("-topmost")) != topmost:
                 win.attributes("-topmost", topmost)
             self._shown = True
+            self._last_rect = rect
             self._stack_below()
         except Exception as exc:
             print("shadow show failed:", exc)
@@ -430,6 +446,7 @@ class WindowShadow:
         if win is None:
             return
         self._shown = False
+        self._last_rect = None
         try:
             win.withdraw()
         except Exception as exc:
