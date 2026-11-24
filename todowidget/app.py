@@ -1692,9 +1692,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
-            # 动画帧为了速度没画抗锯齿卡片, 收尾补一张完整的
-            self.sync_main_shadow()
             done()
+            # 刚设过 geometry, Tk 要过一轮事件才认新尺寸(这时 winfo_height
+            # 还是旧值), 等 30ms 再让阴影按最终尺寸现身
+            self.root.after(30, self.resume_main_shadow)
 
         self._animating = True
         # 阴影先退场: 跟着每帧缩放的影子会漏出一帧(大影子还留在原地),
@@ -1731,9 +1732,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 return
             self._fold_job = None
             self._animating = False
-            # 动画帧为了速度没画抗锯齿卡片, 收尾补一张完整的
-            self.sync_main_shadow()
             done()
+            # 刚设过 geometry, Tk 要过一轮事件才认新尺寸(这时 winfo_height
+            # 还是旧值), 等 30ms 再让阴影按最终尺寸现身
+            self.root.after(30, self.resume_main_shadow)
 
         self._animating = True
         self.hide_main_shadow()
@@ -3688,11 +3690,32 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 shadow._image_size = None
         return shadow
 
+    def resume_main_shadow(self):
+        """收起/展开动画收尾: 几何生效之后让阴影按最终尺寸现身"""
+        if self._animating:
+            # 又折叠/展开了一次, 交给下一轮收尾
+            return
+        shadow = getattr(self, "_main_shadow", None)
+        if shadow is None or not getattr(shadow, "suspended", False):
+            return
+        try:
+            if self.root.state() != "normal":
+                # 窗口这会儿藏着, 别把阴影单独显示出来
+                shadow.suspended = False
+                return
+        except Exception:
+            pass
+        shadow.resume()
+
     def hide_main_shadow(self):
-        """收起/展开动画开始时先让阴影退场"""
+        """收起/展开动画开始时先让阴影退场
+
+        用 suspend(): 动画每帧窗口都会来 <Configure>, 光 hide() 的话
+        阴影的自动跟随会把它又显示出来(看起来就是先收起了才消失)。
+        """
         shadow = getattr(self, "_main_shadow", None)
         if shadow is not None:
-            shadow.hide()
+            shadow.suspend()
 
     def sync_main_shadow(self, width=None, height=None, x=None, y=None):
         """主窗口的阴影跟着几何走
@@ -3707,6 +3730,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return
         shadow = getattr(self, "_main_shadow", None)
         if shadow is None:
+            return
+        if getattr(shadow, "suspended", False):
+            # 动画还没收尾 / 新尺寸还没生效: 先别现身,
+            # 由 resume_main_shadow() 在几何生效后统一处理
             return
         shadow.sync(width, height, x, y)
 

@@ -197,6 +197,8 @@ class WindowShadow:
         self._image = None
         self._shown = False
         self._last_rect = None
+        # True 时 sync 一律不再显示(收起/展开动画用), 直到 resume()
+        self.suspended = False
 
     def create(self):
         """先把阴影窗口建出来(还没显示)"""
@@ -242,7 +244,7 @@ class WindowShadow:
         """
         owner = self.owner
         win = self.win
-        if win is None or Image is None:
+        if win is None or Image is None or self.suspended:
             return
         try:
             if owner.state() != "normal":
@@ -439,6 +441,17 @@ class WindowShadow:
         owner.bind("<Map>", sync_later, add="+")
         owner.bind("<Unmap>", on_unmap, add="+")
         owner.after(30, sync_later)
+
+    def suspend(self):
+        """先退场, 并且之后的自动同步都别再显示它(收起/展开动画用)"""
+        self.suspended = True
+        self.hide()
+
+    def resume(self):
+        """动画结束: 恢复显示, 按窗口现在的位置/大小重新摆一次"""
+        self.suspended = False
+        self._last_rect = None
+        self.sync()
 
     def hide(self):
         """藏起来(跟着窗口收起/隐藏)"""
