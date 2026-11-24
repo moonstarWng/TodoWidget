@@ -860,10 +860,15 @@ class SettingsMixin:
             "border_width": int((existing.get("border") or {}).get("width") or 2),
             "border_color": (existing.get("border") or {}).get("color") or "#3b7cf6",
             "border_color2": (existing.get("border") or {}).get("color2") or "#8a5cf6",
-            "header_split": bool(existing.get("header_split")),
-            "header_color": existing.get("header_color") or "#17181d",
-            "footer_split": bool(existing.get("footer_split")),
-            "footer_color": existing.get("footer_color") or "#17181d",
+            "bars_split": bool(existing.get("bars_split",
+                                            existing.get("header_split")
+                                            or existing.get("footer_split"))),
+            "bars_color": (existing.get("bars_color")
+                           or existing.get("header_color") or "#17181d"),
+            "bars_color2": (existing.get("bars_color2")
+                            or existing.get("footer_color")
+                            or existing.get("bars_color") or "#2b2e38"),
+            "bars_grad": bool(existing.get("bars_grad")),
         }
 
         win = tk.Toplevel(self.settings_win or self.root)
@@ -1295,26 +1300,36 @@ class SettingsMixin:
         dropper(color_row, lambda c: apply_border_color(c))
 
         # ---- 外观页: 顶栏 / 底栏 ----
+        # 顶栏和底栏共用一份: 只配一次, 也可以配成渐变
         bars_box = section(page_look, "顶栏 / 底栏",
-                           "勾上「单独上色」就不再透出底图")
-        bar_rows = {}
-        for key, label in (("header", "顶栏"), ("footer", "底栏")):
-            line = tk.Frame(bars_box, bg=P.bg)
-            line.pack(fill="x", pady=(0, 6))
-            tk.Label(line, text=label, bg=P.bg, fg=P.fg_dim,
-                     font=self.f_small, width=6, anchor="w").pack(side="left")
-            swatch = tk.Frame(line, bg=state[key + "_color"], width=36,
+                           "两栏共用一份颜色；勾「上色」才单独上色，「渐变」用两个色")
+        bar_line = tk.Frame(bars_box, bg=P.bg)
+        bar_line.pack(fill="x", pady=(0, 6))
+        tk.Label(bar_line, text="颜色", bg=P.bg, fg=P.fg_dim,
+                 font=self.f_small, width=6, anchor="w").pack(side="left")
+        bar_swatch = tk.Frame(bar_line, bg=state["bars_color"], width=36,
                               height=22, highlightthickness=1,
                               highlightbackground=P.border, cursor="hand2")
-            swatch.pack(side="left")
-            swatch.pack_propagate(False)
-            swatch.bind("<Button-1>", lambda ev, k=key: pick_bar(k))
-            chip = tk.Label(line, text="单独上色", bg=P.bg_alt, fg=P.fg_dim,
-                            font=self.f_small, padx=10, pady=4, cursor="hand2")
-            chip.pack(side="left", padx=(10, 0))
-            chip.bind("<Button-1>", lambda ev, k=key: toggle_split(k))
-            dropper(line, lambda c, k=key: apply_bar_color(k, c))
-            bar_rows[key] = (swatch, chip)
+        bar_swatch.pack(side="left")
+        bar_swatch.pack_propagate(False)
+        bar_swatch.bind("<Button-1>", lambda ev: pick_bar(1))
+        bar_swatch2 = tk.Frame(bar_line, bg=state["bars_color2"], width=36,
+                               height=22, highlightthickness=1,
+                               highlightbackground=P.border, cursor="hand2")
+        bar_swatch2.pack(side="left", padx=(6, 0))
+        bar_swatch2.pack_propagate(False)
+        bar_swatch2.bind("<Button-1>", lambda ev: pick_bar(2))
+        bar_chip = tk.Label(bar_line, text="上色", bg=P.bg_alt, fg=P.fg_dim,
+                            font=self.f_small, padx=10, pady=4,
+                            cursor="hand2")
+        bar_chip.pack(side="left", padx=(10, 0))
+        bar_chip.bind("<Button-1>", lambda ev: toggle_bars())
+        bar_grad_chip = tk.Label(bar_line, text="渐变", bg=P.bg_alt,
+                                 fg=P.fg_dim, font=self.f_small, padx=10,
+                                 pady=4, cursor="hand2")
+        bar_grad_chip.pack(side="left", padx=(6, 0))
+        bar_grad_chip.bind("<Button-1>", lambda ev: toggle_bars_grad())
+        dropper(bar_line, lambda c: apply_bar_color(c))
 
         # ---- 字体页 ----
         font_box = section(page_font, "字体",
@@ -1496,10 +1511,10 @@ class SettingsMixin:
             border_swatch.configure(bg=color)
             refresh_preview()
 
-        def apply_bar_color(key, color):
-            """吸管取到的顶栏/底栏颜色"""
-            state[key + "_color"] = color
-            bar_rows[key][0].configure(bg=color)
+        def apply_bar_color(color):
+            """吸管取到的顶栏/底栏颜色(先填主色)"""
+            state["bars_color"] = color
+            bar_swatch.configure(bg=color)
             refresh_preview()
 
         def set_scrim(key):
@@ -1554,28 +1569,45 @@ class SettingsMixin:
                 border_swatch2.configure(bg=picked)
             refresh_preview()
 
-        def paint_split(key):
-            """刷新"单独上色"按钮的选中态"""
-            chip = bar_rows[key][1]
-            chosen = bool(state[key + "_split"])
-            chip.configure(bg=P.accent if chosen else P.bg_alt,
-                           fg=best_text_color(P.accent) if chosen else P.fg_dim)
+        def paint_bars_chips():
+            """刷新「上色」「渐变」两个按钮的选中态"""
+            for key, chip in (("bars_split", bar_chip),
+                              ("bars_grad", bar_grad_chip)):
+                chosen = bool(state.get(key))
+                chip.configure(bg=P.accent if chosen else P.bg_alt,
+                               fg=best_text_color(P.accent) if chosen
+                               else P.fg_dim)
+            # 第二个色只在渐变时有用, 纯色时压暗一点
+            bar_swatch2.configure(
+                highlightbackground=(P.border if state.get("bars_grad")
+                                     else P.bg_alt))
 
-        def toggle_split(key):
-            """顶栏 / 底栏 是否单独上色"""
-            state[key + "_split"] = not bool(state[key + "_split"])
-            paint_split(key)
+        def toggle_bars():
+            """顶栏/底栏 是否单独上色"""
+            state["bars_split"] = not bool(state.get("bars_split"))
+            paint_bars_chips()
             refresh_preview()
 
-        def pick_bar(key):
-            """选顶栏 / 底栏的颜色"""
-            field = key + "_color"
-            _, picked = colorchooser.askcolor(color=state[field], parent=win,
-                                              title="选择颜色")
+        def toggle_bars_grad():
+            """顶栏/底栏 用纯色还是两个色的渐变"""
+            state["bars_grad"] = not bool(state.get("bars_grad"))
+            if state["bars_grad"]:
+                state["bars_split"] = True
+            paint_bars_chips()
+            refresh_preview()
+
+        def pick_bar(which):
+            """选颜色; which=1 主色, 2 渐变的第二个色"""
+            field = "bars_color" if which == 1 else "bars_color2"
+            _, picked = colorchooser.askcolor(color=state.get(field), parent=win,
+                                              title="选择顶栏/底栏颜色")
             if not picked:
                 return
             state[field] = picked
-            bar_rows[key][0].configure(bg=picked)
+            if which == 1:
+                bar_swatch.configure(bg=picked)
+            else:
+                bar_swatch2.configure(bg=picked)
             refresh_preview()
 
         def update_hint_text():
@@ -1725,11 +1757,20 @@ class SettingsMixin:
                 frost = Image.blend(frost, Image.new("RGB", region.size, panel), 0.3)
                 mock.paste(frost, box[:2])
                 draw = ImageDraw.Draw(mock, "RGBA")
-            # 顶栏 / 底栏
-            if state["header_split"]:
-                draw.rectangle([0, 0, w, head_h], fill=state["header_color"])
-            if state["footer_split"]:
-                draw.rectangle([0, body_bottom, w, h], fill=state["footer_color"])
+            # 顶栏 / 底栏(共用一份, 可以是渐变)
+            def fill_bars(y0, y1):
+                if not state.get("bars_split"):
+                    return
+                top = state.get("bars_color") or "#17181d"
+                bottom = (state.get("bars_color2") if state.get("bars_grad")
+                          else top)
+                span = max(1, y1 - y0)
+                for i in range(span):
+                    draw.line([(0, y0 + i), (w, y0 + i)],
+                              fill=mix_color(top, bottom, i / float(span)))
+
+            fill_bars(0, head_h)
+            fill_bars(body_bottom, h)
             # 示例行
             fg = state["fg"] or auto_text_color(auto_bg())
             small_font = mock_font("cn", 9)
@@ -1890,8 +1931,7 @@ class SettingsMixin:
         set_border_mode(state["border_mode"])
         border_scale.set(int(state["border_width"]))
         radius_scale.set(int(state.get("radius") or 0))
-        paint_split("header")
-        paint_split("footer")
+        paint_bars_chips()
         set_mode(state["mode"])
         render_preview()
 
@@ -1970,10 +2010,15 @@ class SettingsMixin:
                                  width=int(state.get("border_width") or 2),
                                  color=state.get("border_color") or "#3b7cf6",
                                  color2=state.get("border_color2") or "#8a5cf6"),
-                     header_split=bool(state.get("header_split")),
-                     header_color=state.get("header_color") or "#17181d",
-                     footer_split=bool(state.get("footer_split")),
-                     footer_color=state.get("footer_color") or "#17181d")
+                     bars_split=bool(state.get("bars_split")),
+                     bars_color=state.get("bars_color") or "#17181d",
+                     bars_color2=(state.get("bars_color2")
+                                  or state.get("bars_color") or "#2b2e38"),
+                     bars_grad=bool(state.get("bars_grad")),
+                     header_split=bool(state.get("bars_split")),
+                     header_color=state.get("bars_color") or "#17181d",
+                     footer_split=bool(state.get("bars_split")),
+                     footer_color=state.get("bars_color") or "#17181d")
         self.theme = "custom:" + theme["id"]
         self.accent = None
         self.save_conf()

@@ -216,6 +216,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.header_color = "#17181d"
         self.footer_split = False
         self.footer_color = "#17181d"
+        # 顶栏/底栏共用一份配置
+        self.bars_split = False
+        self.bars_color = "#17181d"
+        self.bars_color2 = "#2b2e38"
+        self.bars_grad = False
         self.bg_image = ""
         self._theme_image = ""
         self.settings_win = None
@@ -417,6 +422,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.header_color = extras["header_color"]
         self.footer_split = extras["footer_split"]
         self.footer_color = extras["footer_color"]
+        self.bars_split = extras["bars_split"]
+        self.bars_color = extras["bars_color"]
+        self.bars_color2 = extras["bars_color2"]
+        self.bars_grad = extras["bars_grad"]
         self.bg_image = self.bg_image_path()
 
     def build_ui(self):
@@ -1947,6 +1956,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     "scrim_mode": "frost", "radius": 0,
                     "border_mode": "none", "border_width": 2,
                     "border_color": "#3b7cf6", "border_color2": "#8a5cf6",
+                    "bars_split": False, "bars_color": "#17181d",
+                    "bars_color2": "#2b2e38", "bars_grad": False,
                     "header_split": False, "header_color": "#17181d",
                     "footer_split": False, "footer_color": "#17181d"}
         custom = self.custom_theme()
@@ -1955,6 +1966,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         border = custom.get("border") or {}
         mode = border.get("mode")
         scrim = custom.get("scrim")
+        # 顶栏/底栏共用一份; 老配色只存过 header_*/footer_*, 那样读出来
+        if "bars_split" in custom:
+            bars_split = bool(custom.get("bars_split"))
+            bars_color = custom.get("bars_color") or "#17181d"
+            bars_color2 = custom.get("bars_color2") or bars_color
+            bars_grad = bool(custom.get("bars_grad"))
+        else:
+            bars_split = bool(custom.get("header_split")
+                              or custom.get("footer_split"))
+            bars_color = custom.get("header_color") or "#17181d"
+            bars_color2 = custom.get("footer_color") or bars_color
+            bars_grad = False
         return {
             "font_cn": custom.get("font_cn") or "",
             "font_latin": custom.get("font_latin") or "",
@@ -1964,10 +1987,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             "border_color": border.get("color") or "#3b7cf6",
             "border_color2": border.get("color2") or "#8a5cf6",
             "radius": max(0, min(14, int(custom.get("radius") or 0))),
-            "header_split": bool(custom.get("header_split")),
-            "header_color": custom.get("header_color") or "#17181d",
-            "footer_split": bool(custom.get("footer_split")),
-            "footer_color": custom.get("footer_color") or "#17181d",
+            "bars_split": bars_split,
+            "bars_color": bars_color,
+            "bars_color2": bars_color2,
+            "bars_grad": bars_grad,
+            "header_split": bars_split,
+            "header_color": bars_color,
+            "footer_split": bars_split,
+            "footer_color": bars_color,
         }
 
     def skin_spec(self):
@@ -2515,9 +2542,23 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """
         if not (self.header_split or self.footer_split):
             return image
-        from PIL import ImageDraw
         pad = self.border_pad()
         width, height = image.size
+        if self.bars_grad:
+            # 顶栏和底栏各贴一条同样的渐变带(颜色是同一份配置)
+            band_w = max(1, width - 2 * pad)
+            head_band = self.gradient_image(
+                {"grad_start": self.bars_color,
+                 "grad_end": self.bars_color2,
+                 "grad_angle": "vertical"}, band_w, 40)
+            foot_band = self.gradient_image(
+                {"grad_start": self.bars_color,
+                 "grad_end": self.bars_color2,
+                 "grad_angle": "vertical"}, band_w, 32)
+            image.paste(head_band, (pad, pad))
+            image.paste(foot_band, (pad, max(pad, height - pad - 32)))
+            return image
+        from PIL import ImageDraw
         draw = ImageDraw.Draw(image)
         if self.header_split:
             draw.rectangle([pad, pad, width - 1 - pad, pad + 39],
@@ -2761,6 +2802,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """是不是要画边框"""
         return self.border_mode in ("solid", "gradient") and self.border_width > 0
 
+    def bars_on_skin(self):
+        """顶栏/底栏用渐变时只能画在皮肤底图上(纯色帧画不出渐变)"""
+        return bool(self.bars_split and self.bars_grad)
+
     def render_spec(self):
         """画底图用的规格
 
@@ -2770,7 +2815,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         spec = self.skin_spec()
         if spec is not None:
             return spec
-        if self.border_active():
+        if self.border_active() or self.bars_on_skin():
             return {"mode": "solid", "bg": P.bg, "alpha": 0.0}
         return None
 
@@ -2795,7 +2840,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             except Exception:
                 pass
         color = P.bg
-        if self.skin_spec() is not None or self.border_active():
+        if self.render_spec() is not None:
             color = self.skin_key()
         try:
             self.root.configure(bg=color)
@@ -2883,16 +2928,21 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """顶栏底色: 皮肤模式下透明(颜色画在底图上), 纯色主题用顶栏色"""
         if self.skin_spec() is not None:
             return self.blank_bg()
-        if self.header_split:
-            return self.header_color
+        if self.bars_on_skin() and self.render_spec() is not None:
+            # 渐变栏画在皮肤底图上, 这里要透明才看得见
+            return self.skin_key()
+        if self.bars_split:
+            return self.bars_color
         return P.head
 
     def footer_bg(self):
         """底栏底色: 皮肤模式下透明(颜色画在底图上)"""
         if self.skin_spec() is not None:
             return self.blank_bg()
-        if self.footer_split:
-            return self.footer_color
+        if self.bars_on_skin() and self.render_spec() is not None:
+            return self.skin_key()
+        if self.bars_split:
+            return self.bars_color
         return P.bg
 
     def repaint_area(self, widget, color):

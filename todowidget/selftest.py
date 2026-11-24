@@ -556,6 +556,20 @@ def run_selftest():
     root.geometry("330x460")
     settle(10)
 
+    # 顶栏/底栏合并成一份设置: 三个颜色键要一致, 渐变时必须走皮肤底图
+    extras_now = app.theme_extras()
+    same_color = (extras_now["header_color"] == extras_now["footer_color"]
+                  == extras_now["bars_color"]
+                  and extras_now["header_split"] == extras_now["footer_split"]
+                  == extras_now["bars_split"])
+    check("顶栏底栏共用一份配置", same_color)
+    saved_bars = (app.bars_split, app.bars_grad)
+    app.bars_split = True
+    app.bars_grad = True
+    on_skin = app.bars_on_skin() and app.render_spec() is not None
+    app.bars_split, app.bars_grad = saved_bars
+    check("渐变顶底栏画在皮肤底图上", on_skin)
+
     # 换配色是整块重建: 阴影要先挂起, 重建完之后才出现(不然会先看到
     # 一个没有窗口的影子飘在那儿)
     app.reload_ui()
