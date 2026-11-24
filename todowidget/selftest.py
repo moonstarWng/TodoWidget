@@ -570,6 +570,30 @@ def run_selftest():
     app.bars_split, app.bars_grad = saved_bars
     check("渐变顶底栏画在皮肤底图上", on_skin)
 
+    # 栏单独上色后, 顶栏/底栏的文字要换成跟栏相配的颜色
+    saved_bar_cfg = (app.bars_split, app.bars_color)
+    app.bars_split = True
+    app.bars_color = "#e8788a"
+    bar_colors = app.bar_fg_colors()
+    dark_on_light = (bar_colors is not None
+                     and bar_colors["fg"] == "#1c1d22")
+    app.bars_split, app.bars_color = saved_bar_cfg
+    check("浅色栏上的文字自动变深", dark_on_light)
+
+    # 顶栏/底栏渐变方向可配(竖/横/斜)
+    angle = app.theme_extras().get("bars_angle")
+    check("顶底栏渐变方向可配",
+          angle in ("vertical", "horizontal", "diagonal"))
+
+    # 自带的像素字体: 能注册、能按字族名找到文件、能加载、能出现在中文字体列表
+    from . import fonts as fonts_mod
+    fonts_mod.register_bundled()
+    pixel_family = "Ark Pixel 12px Prop zh-Hans"
+    pixel_ok = (bool(fonts_mod.font_file(pixel_family))
+                and fonts_mod.load(pixel_family, 20) is not None
+                and pixel_family in fonts_mod.cjk_families())
+    check("自带的像素字体能用", pixel_ok)
+
     # 换配色是整块重建: 阴影要先挂起, 重建完之后才出现(不然会先看到
     # 一个没有窗口的影子飘在那儿)
     app.reload_ui()

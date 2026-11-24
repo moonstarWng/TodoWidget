@@ -869,6 +869,7 @@ class SettingsMixin:
                             or existing.get("footer_color")
                             or existing.get("bars_color") or "#2b2e38"),
             "bars_grad": bool(existing.get("bars_grad")),
+            "bars_angle": existing.get("bars_angle") or "vertical",
         }
 
         win = tk.Toplevel(self.settings_win or self.root)
@@ -1330,6 +1331,19 @@ class SettingsMixin:
         bar_grad_chip.pack(side="left", padx=(6, 0))
         bar_grad_chip.bind("<Button-1>", lambda ev: toggle_bars_grad())
         dropper(bar_line, lambda c: apply_bar_color(c))
+        angle_line = tk.Frame(bars_box, bg=P.bg)
+        angle_line.pack(fill="x", pady=(0, 4))
+        tk.Label(angle_line, text="方向", bg=P.bg, fg=P.fg_faint,
+                 font=self.f_small, width=6, anchor="w").pack(side="left")
+        bar_angle_chips = {}
+        for key, label in (("vertical", "竖"), ("horizontal", "横"),
+                           ("diagonal", "斜")):
+            chip = tk.Label(angle_line, text=label, bg=P.bg_alt,
+                            fg=P.fg_dim, font=self.f_small, padx=8, pady=2,
+                            cursor="hand2")
+            chip.pack(side="left", padx=(0, 6))
+            chip.bind("<Button-1>", lambda ev, k=key: set_bars_angle(k))
+            bar_angle_chips[key] = chip
 
         # ---- 字体页 ----
         font_box = section(page_font, "字体",
@@ -1581,6 +1595,13 @@ class SettingsMixin:
             bar_swatch2.configure(
                 highlightbackground=(P.border if state.get("bars_grad")
                                      else P.bg_alt))
+            angle = state.get("bars_angle") or "vertical"
+            usable = bool(state.get("bars_grad"))
+            for key, chip in bar_angle_chips.items():
+                chosen = usable and key == angle
+                chip.configure(bg=P.accent if chosen else P.bg_alt,
+                               fg=best_text_color(P.accent) if chosen
+                               else (P.fg_dim if usable else P.fg_faint))
 
         def toggle_bars():
             """顶栏/底栏 是否单独上色"""
@@ -1593,6 +1614,12 @@ class SettingsMixin:
             state["bars_grad"] = not bool(state.get("bars_grad"))
             if state["bars_grad"]:
                 state["bars_split"] = True
+            paint_bars_chips()
+            refresh_preview()
+
+        def set_bars_angle(key):
+            """顶栏/底栏渐变的方向"""
+            state["bars_angle"] = key
             paint_bars_chips()
             refresh_preview()
 
@@ -1764,10 +1791,27 @@ class SettingsMixin:
                 top = state.get("bars_color") or "#17181d"
                 bottom = (state.get("bars_color2") if state.get("bars_grad")
                           else top)
-                span = max(1, y1 - y0)
-                for i in range(span):
-                    draw.line([(0, y0 + i), (w, y0 + i)],
-                              fill=mix_color(top, bottom, i / float(span)))
+                angle = state.get("bars_angle") or "vertical"
+                if not state.get("bars_grad"):
+                    draw.rectangle([0, y0, w, y1], fill=top)
+                    return
+                if angle == "horizontal":
+                    span = max(1, w)
+                    for x in range(span):
+                        draw.line([(x, y0), (x, y1)],
+                                  fill=mix_color(top, bottom,
+                                                 x / float(span)))
+                elif angle == "diagonal":
+                    span = max(1, w + (y1 - y0))
+                    for x in range(w):
+                        for y in range(y0, y1):
+                            mix = (x + (y - y0)) / float(span)
+                            draw.point((x, y), fill=mix_color(top, bottom, mix))
+                else:
+                    span = max(1, y1 - y0)
+                    for i in range(span):
+                        draw.line([(0, y0 + i), (w, y0 + i)],
+                                  fill=mix_color(top, bottom, i / float(span)))
 
             fill_bars(0, head_h)
             fill_bars(body_bottom, h)
@@ -2015,6 +2059,7 @@ class SettingsMixin:
                      bars_color2=(state.get("bars_color2")
                                   or state.get("bars_color") or "#2b2e38"),
                      bars_grad=bool(state.get("bars_grad")),
+                     bars_angle=state.get("bars_angle") or "vertical",
                      header_split=bool(state.get("bars_split")),
                      header_color=state.get("bars_color") or "#17181d",
                      footer_split=bool(state.get("bars_split")),

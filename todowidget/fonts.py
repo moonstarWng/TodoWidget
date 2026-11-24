@@ -5,6 +5,7 @@ Windows 注册表里是英文名(SimSun), Tk 报出来的是本地化名(宋体)
 这里加一张对照表把两边对齐; 自绘列表要的是字体文件, 也在这里解析。
 """
 
+import ctypes
 import io
 import json
 import os
@@ -15,6 +16,36 @@ except Exception:
     ImageFont = None
 
 FONT_DIR = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts")
+# 随程序带的字体(在 assets/fonts 下, 许可证见同目录 OFL-*.txt)
+BUNDLE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          "assets", "fonts")
+# (小写查找键, 文件名, 显示用的字族名)
+BUNDLED = (
+    ("ark pixel 12px prop zh-hans", "ArkPixel12px-zh_hans.ttf",
+     "Ark Pixel 12px Prop zh-Hans"),
+)
+_registered = False
+
+
+def register_bundled():
+    """把随程序带的字体注册进本进程(不装进系统, 只在程序里可用)"""
+    global _registered
+    if _registered:
+        return
+    _registered = True
+    try:
+        gdi32 = ctypes.windll.gdi32
+    except Exception:
+        return
+    for _key, filename, _pretty in BUNDLED:
+        path = os.path.join(BUNDLE_DIR, filename)
+        if not os.path.exists(path):
+            continue
+        try:
+            # FR_PRIVATE: 只给本进程用, 不动用户的系统字体
+            gdi32.AddFontResourceExW(path, 0x10, 0)
+        except Exception:
+            pass
 CACHE_FILE = os.path.join(
     os.environ.get("APPDATA") or FONT_DIR, "TodoWidget", "font_cache.json")
 
@@ -99,6 +130,12 @@ def _scan():
                 winreg.CloseKey(key)
             except Exception:
                 pass
+    # 自带的字体也算进来: 自绘列表要按字族名找文件
+    for key_name, filename, pretty in BUNDLED:
+        full = os.path.join(BUNDLE_DIR, filename)
+        if os.path.exists(full):
+            paths.setdefault(key_name, full)
+            names.setdefault(key_name, pretty)
     _paths, _names = paths, names
 
 
@@ -204,6 +241,11 @@ def cjk_families(tk_families=()):
     for name in wanted:
         if name in known or _can_draw_chinese(name):
             result.append(name)
+    # 自带的像素字体 Tk 不一定报得出来, 直接补进列表
+    for _key, filename, pretty in BUNDLED:
+        if os.path.exists(os.path.join(BUNDLE_DIR, filename)):
+            if pretty not in result:
+                result.append(pretty)
     if not result:
         return ["Microsoft YaHei UI"]
     return result

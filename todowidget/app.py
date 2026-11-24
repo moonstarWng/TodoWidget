@@ -21,9 +21,9 @@ from .store import Store
 from . import theme as T
 from .anim import Tween, ease_in_out_cubic, mix_hex
 from .listpaint import ListPaintMixin
-from . import screens
-from .theme import (P, GRADIENTS, apply_palette, custom_scheme, hex_to_rgb,
-                    mix_color, pick_font, set_theme)
+from . import fonts, screens
+from .theme import (P, GRADIENTS, apply_palette, best_text_color,
+                    custom_scheme, hex_to_rgb, mix_color, pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
 
 if HAS_TRAY:
@@ -221,6 +221,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.bars_color = "#17181d"
         self.bars_color2 = "#2b2e38"
         self.bars_grad = False
+        self.bars_angle = "vertical"
         self.bg_image = ""
         self._theme_image = ""
         self.settings_win = None
@@ -426,9 +427,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.bars_color = extras["bars_color"]
         self.bars_color2 = extras["bars_color2"]
         self.bars_grad = extras["bars_grad"]
+        self.bars_angle = extras["bars_angle"]
         self.bg_image = self.bg_image_path()
 
     def build_ui(self):
+        # 先把自带的字体注册进来, 下面建字体时才能用它
+        fonts.register_bundled()
         # 皮肤相关缓存跟着重建一起重算(透明色/底图平均色都跟主题走)
         self._skin_key = None
         self._skin_avg = None
@@ -1958,6 +1962,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     "border_color": "#3b7cf6", "border_color2": "#8a5cf6",
                     "bars_split": False, "bars_color": "#17181d",
                     "bars_color2": "#2b2e38", "bars_grad": False,
+                    "bars_angle": "vertical",
                     "header_split": False, "header_color": "#17181d",
                     "footer_split": False, "footer_color": "#17181d"}
         custom = self.custom_theme()
@@ -1972,12 +1977,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             bars_color = custom.get("bars_color") or "#17181d"
             bars_color2 = custom.get("bars_color2") or bars_color
             bars_grad = bool(custom.get("bars_grad"))
+            bars_angle = custom.get("bars_angle") or "vertical"
         else:
             bars_split = bool(custom.get("header_split")
                               or custom.get("footer_split"))
             bars_color = custom.get("header_color") or "#17181d"
             bars_color2 = custom.get("footer_color") or bars_color
             bars_grad = False
+            bars_angle = "vertical"
         return {
             "font_cn": custom.get("font_cn") or "",
             "font_latin": custom.get("font_latin") or "",
@@ -1991,6 +1998,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             "bars_color": bars_color,
             "bars_color2": bars_color2,
             "bars_grad": bars_grad,
+            "bars_angle": bars_angle if bars_angle in ("vertical",
+                                                       "horizontal",
+                                                       "diagonal")
+            else "vertical",
             "header_split": bars_split,
             "header_color": bars_color,
             "footer_split": bars_split,
@@ -2547,14 +2558,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if self.bars_grad:
             # 顶栏和底栏各贴一条同样的渐变带(颜色是同一份配置)
             band_w = max(1, width - 2 * pad)
-            head_band = self.gradient_image(
-                {"grad_start": self.bars_color,
-                 "grad_end": self.bars_color2,
-                 "grad_angle": "vertical"}, band_w, 40)
-            foot_band = self.gradient_image(
-                {"grad_start": self.bars_color,
-                 "grad_end": self.bars_color2,
-                 "grad_angle": "vertical"}, band_w, 32)
+            spec = {"grad_start": self.bars_color,
+                    "grad_end": self.bars_color2,
+                    "grad_angle": self.bars_angle}
+            head_band = self.gradient_image(spec, band_w, 40)
+            foot_band = self.gradient_image(spec, band_w, 32)
             image.paste(head_band, (pad, pad))
             image.paste(foot_band, (pad, max(pad, height - pad - 32)))
             return image
@@ -2801,6 +2809,49 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
     def border_active(self):
         """是不是要画边框"""
         return self.border_mode in ("solid", "gradient") and self.border_width > 0
+
+    def bar_fg_colors(self):
+        """顶栏/底栏上的文字色
+
+        栏单独上色以后, 原来的文字色是按列表底色配的: 浅色栏上压白字
+        会看不清(看着像空心)。这里按栏的颜色重算一套。
+        """
+        if not self.bars_split:
+            return None
+        base = best_text_color(self.bars_color)
+        return {"fg": base,
+                "dim": mix_color(base, self.bars_color, 0.25),
+                "faint": mix_color(base, self.bars_color, 0.45)}
+
+    def retint_bars(self):
+        """把顶栏/底栏里的文字按栏的颜色重新上色"""
+        colors = self.bar_fg_colors()
+        if colors is None:
+            return
+        table = {str(P.fg).lower(): colors["fg"],
+                 str(P.fg_dim).lower(): colors["dim"],
+                 str(P.fg_faint).lower(): colors["faint"],
+                 "#ffffff": colors["fg"]}
+
+        def walk(widget, depth=0):
+            if depth > 3:
+                return
+            try:
+                current = str(widget.cget("fg")).lower()
+            except Exception:
+                current = ""
+            if current in table:
+                try:
+                    widget.configure(fg=table[current])
+                except Exception:
+                    pass
+            for child in widget.winfo_children():
+                walk(child, depth + 1)
+
+        for top in (getattr(self, "_head", None),
+                    getattr(self, "_foot", None)):
+            if top is not None:
+                walk(top)
 
     def bars_on_skin(self):
         """顶栏/底栏用渐变时只能画在皮肤底图上(纯色帧画不出渐变)"""
@@ -3837,6 +3888,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         # 阴影最后一个出现: 先挂起, 等皮肤/内容都摆好了再显示
         self.hide_main_shadow()
         self.apply_resize_state()
+        # 栏单独上色时, 顶栏/底栏的文字要换成跟栏相配的颜色
+        self.retint_bars()
+        # 标题有淡入动画, 动画写完会重设文字色, 收尾再补一次
+        self.root.after(200, self.retint_bars)
         if skin is not None:
             self.make_skin()
         else:
