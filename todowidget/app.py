@@ -23,7 +23,8 @@ from .anim import Tween, ease_in_out_cubic, mix_hex
 from .listpaint import ListPaintMixin
 from . import fonts, screens
 from .theme import (P, GRADIENTS, apply_palette, best_text_color,
-                    custom_scheme, hex_to_rgb, mix_color, pick_font, set_theme)
+                    brightness, custom_scheme, hex_to_rgb, mix_color,
+                    pick_font, set_theme)
 from .utils import HAS_TRAY, make_icon, place_window
 
 if HAS_TRAY:
@@ -2837,11 +2838,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """
         if not self.bars_split:
             return None
-        # 渐变时按中点的颜色挑对比色, 不然"浅→深"的栏上会挑出黑字压在深色那头
+        # 渐变时按中点的颜色判断, 不然"浅→深"的栏上会挑出黑字压在深色那头
         back = self.bars_color
         if self.bars_grad:
             back = mix_color(self.bars_color, self.bars_color2, 0.5)
-        base = best_text_color(back)
+        # 用户自己配的文字色只要看得清就用他的; 实在糊在一起才自动换黑白
+        base = str(P.fg)
+        if abs(brightness(base) - brightness(back)) < 90:
+            base = best_text_color(back)
         return {"fg": base,
                 "dim": mix_color(base, back, 0.25),
                 "faint": mix_color(base, back, 0.45)}
@@ -2890,6 +2894,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     back = self.bar_color_at(cx, cy, bw, bh)
                     if box == hover_bg:
                         back = mix_color(back, colors["fg"], 0.12)
+                    if abs(brightness(back) - brightness(colors["fg"])) < 50:
+                        # 垫的底色跟字太像会把字吃掉, 往反方向拉开一点
+                        ink = ("#000000" if brightness(colors["fg"]) > 128
+                               else "#ffffff")
+                        back = mix_color(back, ink, 0.45)
                     try:
                         widget.configure(bg=back)
                     except Exception:
