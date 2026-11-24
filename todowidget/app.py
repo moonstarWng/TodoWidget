@@ -3764,7 +3764,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         r.deiconify()
         r.lift()
         self.make_main_shadow()
-        self.sync_main_shadow()
+        # 阴影最后一个出现: 先挂起, 等皮肤/内容都摆好了再显示
+        self.hide_main_shadow()
         self.apply_resize_state()
         if skin is not None:
             self.make_skin()
@@ -3774,6 +3775,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             r.after(150, self.sink)
         r.after(60, self.round_window)
         r.after(80, self.sync_skin)
+        # 底图摆好之后再让阴影现身(换配色时最明显: 不会先看到一个空影子)
+        r.after(90, self.resume_main_shadow)
         self.save_conf()
 
     def toggle_topmost(self):
@@ -3851,17 +3854,18 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if self._tray is None:
             # 没有托盘图标就没法再显示出来, 干脆不隐藏
             return
+        # 阴影最先消失: 先把影子收掉, 再藏窗口
+        self.hide_main_shadow()
         self.root.withdraw()
         self.sync_skin()
-        shadow = getattr(self, "_main_shadow", None)
-        if shadow is not None:
-            shadow.hide()
 
     def show(self):
         self.root.deiconify()
         self.root.lift()
         self.sync_skin()
-        self.sync_main_shadow()
+        # 阴影最后出现: 先挂起, 等窗口画好再显示
+        self.hide_main_shadow()
+        self.root.after(60, self.resume_main_shadow)
         try:
             self.root.focus_force()
             self.raise_notes()

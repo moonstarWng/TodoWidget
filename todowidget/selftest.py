@@ -556,6 +556,20 @@ def run_selftest():
     root.geometry("330x460")
     settle(10)
 
+    # 换配色是整块重建: 阴影要先挂起, 重建完之后才出现(不然会先看到
+    # 一个没有窗口的影子飘在那儿)
+    app.reload_ui()
+    settle(2)
+    new_shadow = getattr(app, "_main_shadow", None)
+    hidden_first = (new_shadow is None or new_shadow.win is None
+                    or getattr(new_shadow, "suspended", False)
+                    or new_shadow.win.state() != "normal")
+    settle(24)
+    new_shadow = getattr(app, "_main_shadow", None)
+    shown_later = (new_shadow is not None and new_shadow.win is not None
+                   and new_shadow.win.state() == "normal")
+    check("换配色重建时阴影最后出现", hidden_first and shown_later)
+
     # BUGFIX#102911 线激光寻中降级重试日志: 寻中开始和每次降级重试都要带轨迹序号
     seek_dir = os.path.join(TUBEPRO_TRUNK, "CAM", "TPSeekModule")
     seek_stat = read_source(os.path.join(seek_dir, "SeekHelp",
