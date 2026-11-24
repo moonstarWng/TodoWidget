@@ -2853,6 +2853,31 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if top is not None:
                 walk(top)
 
+    def watch_bar_tint(self):
+        """盯住顶栏/底栏的 hover、点击、重新映射, 事后补一次上色
+
+        这些回调自己会用主题色重设 fg/bg(P.fg、P.head 之类), 一次性上色
+        会被覆盖掉, 表现就是"颜色有时候不对"。
+        """
+        def again(event=None):
+            self.root.after_idle(self.retint_bars)
+
+        def walk(widget, depth=0):
+            if depth > 3:
+                return
+            for seq in ("<Enter>", "<Leave>", "<ButtonRelease-1>", "<Map>"):
+                try:
+                    widget.bind(seq, again, add="+")
+                except Exception:
+                    pass
+            for child in widget.winfo_children():
+                walk(child, depth + 1)
+
+        for top in (getattr(self, "_head", None),
+                    getattr(self, "_foot", None)):
+            if top is not None:
+                walk(top)
+
     def bars_on_skin(self):
         """顶栏/底栏用渐变时只能画在皮肤底图上(纯色帧画不出渐变)"""
         return bool(self.bars_split and self.bars_grad)
@@ -3890,6 +3915,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.apply_resize_state()
         # 栏单独上色时, 顶栏/底栏的文字要换成跟栏相配的颜色
         self.retint_bars()
+        self.watch_bar_tint()
         # 标题有淡入动画, 动画写完会重设文字色, 收尾再补一次
         self.root.after(200, self.retint_bars)
         if skin is not None:
