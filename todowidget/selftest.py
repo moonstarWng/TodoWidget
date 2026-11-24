@@ -456,6 +456,8 @@ def run_selftest():
     shadow = getattr(app, "_main_shadow", None)
     check("主窗口挂了阴影窗口",
           shadow is not None and shadow.win is not None)
+    check("阴影只大一小圈并往下偏",
+          shadow is not None and shadow.blur <= 10 and shadow.offset >= 3)
     root.geometry("336x476")
     settle(20)
     followed = False

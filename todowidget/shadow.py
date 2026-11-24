@@ -108,7 +108,7 @@ def _rgba(color, alpha=255):
 
 
 def shadow_image(width, height, radius, blur, strength, card=None, ring=None,
-                 offset=2):
+                 offset=5):
     """生成一张带模糊圆角的阴影图(RGBA), 可以再叠一张抗锯齿的卡片
 
     :param width: 窗口宽
@@ -168,14 +168,15 @@ class WindowShadow:
     :param strength: 不透明度 0~1
     """
 
-    def __init__(self, owner, radius=12, blur=18, strength=0.55,
-                 card=None, ring=None):
+    def __init__(self, owner, radius=12, blur=8, strength=0.5,
+                 card=None, ring=None, offset=5):
         self.owner = owner
         self.radius = int(radius)
         self.blur = int(blur)
         self.strength = float(strength)
         self.card = card
         self.ring = ring
+        self.offset = int(offset)
         self.win = None
         self._image_size = None
         self._image = None
@@ -274,11 +275,11 @@ class WindowShadow:
         if card == "keep":
             card = self.card
         key = (int(width), int(height), self.radius, self.blur,
-               round(self.strength, 3), card, self.ring)
+               round(self.strength, 3), card, self.ring, self.offset)
         if key == self._image_size and self._image is not None:
             return self._image
         image = shadow_image(width, height, self.radius, self.blur,
-                             self.strength, card, self.ring)
+                             self.strength, card, self.ring, self.offset)
         if image is None:
             return None
         self._image_size = key
@@ -409,7 +410,7 @@ def _premultiplied(image):
     return Image.merge("RGBA", (blue, green, red, alpha)).tobytes()
 
 
-def attach_shadow(owner, radius=12, blur=18, strength=0.55, card=None,
+def attach_shadow(owner, radius=12, blur=8, strength=0.5, card=None,
                   ring=None):
     """给一个窗口挂上阴影, 位置/大小变了自动跟着走
 

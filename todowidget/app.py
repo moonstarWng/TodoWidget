@@ -3653,7 +3653,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if self.render_spec() is None:
                 card = P.bg
             shadow = WindowShadow(self.root, radius=self.corner_radius(),
-                                  blur=18, strength=0.55, card=card)
+                                  blur=8, strength=0.5, card=card)
             shadow.create()
             shadow.follow(self.root)
             self._main_shadow = shadow
