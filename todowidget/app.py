@@ -2810,6 +2810,25 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """是不是要画边框"""
         return self.border_mode in ("solid", "gradient") and self.border_width > 0
 
+    def bar_color_at(self, x, y, width, height):
+        """顶栏/底栏在某一格的颜色(渐变就按方向插值)
+
+        :param x: 这一格中心的横坐标(相对栏目)
+        :param y: 纵坐标
+        :param width: 栏目宽
+        :param height: 栏目高
+        """
+        if not self.bars_grad:
+            return self.bars_color
+        if self.bars_angle == "horizontal":
+            ratio = x / float(max(1, width))
+        elif self.bars_angle == "diagonal":
+            ratio = (x + y) / float(max(1, width + height))
+        else:
+            ratio = y / float(max(1, height))
+        return mix_color(self.bars_color, self.bars_color2,
+                         max(0.0, min(1.0, ratio)))
+
     def bar_fg_colors(self):
         """顶栏/底栏上的文字色
 
@@ -2818,10 +2837,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         """
         if not self.bars_split:
             return None
-        base = best_text_color(self.bars_color)
+        # 渐变时按中点的颜色挑对比色, 不然"浅→深"的栏上会挑出黑字压在深色那头
+        back = self.bars_color
+        if self.bars_grad:
+            back = mix_color(self.bars_color, self.bars_color2, 0.5)
+        base = best_text_color(back)
         return {"fg": base,
-                "dim": mix_color(base, self.bars_color, 0.25),
-                "faint": mix_color(base, self.bars_color, 0.45)}
+                "dim": mix_color(base, back, 0.25),
+                "faint": mix_color(base, back, 0.45)}
 
     def retint_bars(self):
         """把顶栏/底栏里的文字按栏的颜色重新上色"""
@@ -2833,7 +2856,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                  str(P.fg_faint).lower(): colors["faint"],
                  "#ffffff": colors["fg"]}
 
-        def walk(widget, depth=0):
+        bar_bgs = {str(P.head).lower(), str(P.bg).lower(),
+                   str(P.bg_alt).lower()}
+        hover_bg = str(P.bg_alt).lower()
+
+        def walk(widget, top, depth=0):
             if depth > 3:
                 return
             try:
@@ -2845,13 +2872,35 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     widget.configure(fg=table[current])
                 except Exception:
                     pass
+            if depth:
+                # 文字底下垫一块"这一格里的栏色": 文字压在色键上会被 ClearType
+                # 混成透明, 看着有锯齿/空心; 垫上不透明底色就没有了
+                try:
+                    box = str(widget.cget("bg")).lower()
+                except Exception:
+                    box = ""
+                if box in bar_bgs:
+                    try:
+                        cy = widget.winfo_y() + widget.winfo_height() // 2
+                        cx = widget.winfo_x() + widget.winfo_width() // 2
+                        bh = max(1, top.winfo_height())
+                        bw = max(1, top.winfo_width())
+                    except Exception:
+                        cy, cx, bh, bw = 0, 0, 1, 1
+                    back = self.bar_color_at(cx, cy, bw, bh)
+                    if box == hover_bg:
+                        back = mix_color(back, colors["fg"], 0.12)
+                    try:
+                        widget.configure(bg=back)
+                    except Exception:
+                        pass
             for child in widget.winfo_children():
-                walk(child, depth + 1)
+                walk(child, top, depth + 1)
 
         for top in (getattr(self, "_head", None),
                     getattr(self, "_foot", None)):
             if top is not None:
-                walk(top)
+                walk(top, top)
 
     def watch_bar_tint(self):
         """盯住顶栏/底栏的 hover、点击、重新映射, 事后补一次上色
