@@ -1715,7 +1715,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.paint_head_bg(max(1, width - 2 * self._frame_pad))
             self.round_window(width, height)
             self.clip_skin(width, height)
-            self.paint_skin_frame(width, height)
+            # 只裁区域、不重推分层表面: 底图已经按整窗推好了, 每帧重推
+            # 会让合成器重排, 看着就是闪
             if state["step"] < steps:
                 self._fold_job = self.root.after(10, tick)
                 return
@@ -1755,7 +1756,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             height = int(round(start_h + (target_h - start_h) * eased))
             self.round_window(max(1, width), max(1, height))
             self.clip_skin(max(1, width), max(1, height))
-            self.paint_skin_frame(max(1, width), max(1, height))
+            # 只裁区域、不重推分层表面(展开动画不再闪)
             if state["step"] < steps:
                 self._fold_job = self.root.after(10, tick)
                 return
