@@ -900,9 +900,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         text, cursor = self.title_text()
         self.lbl_title.config(cursor=cursor)
         self.stop_title_fade()
-        if self.bars_split:
-            # 栏单独上色时顶栏是透明的, 往色键上淡会让标题一闪(invisible),
-            # 所以不做淡化, 直接换字
+        if self.skin_spec() is not None or self.bars_on_skin():
+            # 顶栏是透明的(皮肤底图 / 渐变栏)时不做淡化:
+            # 淡化的中间帧是往透明色键上淡的, 那一帧标题就是透明的(看着像消失)
             self.lbl_title.config(text=text, fg=self.title_fg())
             return
         # 皮肤模式下顶栏是透明的, 往透明色上淡才自然
