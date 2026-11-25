@@ -617,8 +617,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if moved:
                 # 拖动期间只挪位置没动底图, 松手什么也不用补
                 self.sync_skin()
-            # 阴影拖动期间藏起来了, 松手按新位置摆回来
-            self.sync_main_shadow()
+            # 阴影拖动期间被 suspend 了, 用 resume 恢复(否则 sync 会因挂起直接返回)
+            self.resume_main_shadow()
             if as_click and not moved and not self.collapsed:
                 self.open_list_menu(e)
 
