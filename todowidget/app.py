@@ -3410,6 +3410,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         win = self.skin_win
         if win is None:
             return
+        if not instant and (getattr(self, "_drag", None) or self._resizing):
+            # 拖动/改大小期间位置由 apply_window_rect 逐帧处理; 皮肤窗口自己
+            # 的 <Configure> 再进来重铺一遍底图, 整窗就会一黑一白地闪
+            return
         if self._animating:
             # 折叠/展开动画每帧自己裁区域, 别让窗口事件用整窗大小盖回去(会闪出一帧大窗口)
             return
