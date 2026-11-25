@@ -874,7 +874,12 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._title_target = text
             return
         self._title_target = None
-        self.lbl_title.config(text=text, fg=P.fg)
+        self.lbl_title.config(text=text, fg=self.title_fg())
+
+    def title_fg(self):
+        """标题该用的文字色: 顶栏单独上色时跟栏的颜色走"""
+        colors = self.bar_fg_colors()
+        return colors["fg"] if colors is not None else P.fg
 
     def stop_title_fade(self):
         """停掉还没跑完的标题淡化, 颜色恢复成正常"""
@@ -884,7 +889,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._title_target = None
         self._title_swapped = False
         try:
-            self.lbl_title.config(fg=P.fg)
+            self.lbl_title.config(fg=self.title_fg())
         except Exception:
             pass
 
@@ -896,6 +901,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         text, cursor = self.title_text()
         self.lbl_title.config(cursor=cursor)
         self.stop_title_fade()
+        if self.bar_fg_colors() is not None:
+            # 栏单独上色时不做淡化: 淡化的中间帧颜色接近底色, 看着字会突然
+            # 没了(透明留白), 直接换成栏上的文字色
+            self.lbl_title.config(text=text, fg=self.title_fg())
+            return
         # 皮肤模式下顶栏是透明的, 往透明色上淡才自然
         backdrop = self.skin_key() if self.skin_spec() is not None else P.head
         self._title_target = text
@@ -916,7 +926,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._title_tween = None
             self._title_target = None
             self._title_swapped = False
-            self.lbl_title.config(fg=P.fg)
+            self.lbl_title.config(fg=self.title_fg())
 
         self._title_tween = Tween(self.root, 0.26, frame, on_done=done,
                                   easing=ease_in_out_cubic)
