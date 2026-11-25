@@ -1668,13 +1668,14 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if canvas is None:
             return
         w = max(1, width or canvas.winfo_width())
+        h = self.fold_bar_height() if self.collapsed else 40
         fill = self.header_bg()
         # 复用同一个矩形, 别每帧删掉再画 —— 删掉的那一瞬间会闪一下
         if getattr(self, "_head_rect", None) is None:
-            self._head_rect = canvas.create_rectangle(0, 0, w, 40,
+            self._head_rect = canvas.create_rectangle(0, 0, w, h,
                                                       fill=fill, outline="")
             return
-        canvas.coords(self._head_rect, 0, 0, w, 40)
+        canvas.coords(self._head_rect, 0, 0, w, h)
         canvas.itemconfigure(self._head_rect, fill=fill)
 
     def animate_collapse(self, start_w, start_h, target_w, target_h, done):
@@ -1694,7 +1695,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         inner_w = max(1, start_w - 2 * self._frame_pad)
         if head.winfo_manager() != "place":
             head.pack_forget()
-            head.place(x=0, y=0, width=inner_w, height=40)
+            head.place(x=0, y=0, width=inner_w,
+                       height=self.fold_bar_height())
         steps = 6
         state = {"step": 0}
 
