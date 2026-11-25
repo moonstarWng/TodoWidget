@@ -587,6 +587,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self._drag_from = (e.x_root, e.y_root)
             self._drag = (e.x_root - r.winfo_x(), e.y_root - r.winfo_y())
             self._drag_moved = False
+            # 拖动期间不推阴影分层表面(每帧 UpdateLayeredWindow 会让整窗闪),
+            # 先藏起来, 松手再按新位置摆回来
+            self.hide_main_shadow()
 
         def on_drag(e):
             """鼠标动一下: 只记目标位置, 真正搬窗口由定时器按帧做
@@ -614,6 +617,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             if moved:
                 # 拖动期间只挪位置没动底图, 松手什么也不用补
                 self.sync_skin()
+            # 阴影拖动期间藏起来了, 松手按新位置摆回来
+            self.sync_main_shadow()
             if as_click and not moved and not self.collapsed:
                 self.open_list_menu(e)
 
@@ -3538,7 +3543,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                 user32.EndDeferWindowPos(batch)
                 if skin:
                     self._skin_geom = (width, height, x, y)
-                self.sync_main_shadow(width, height, x, y)
             else:
                 user32.SetWindowPos(main, 0, x, y, width, height,
                                     no_zorder | no_activate)
@@ -3746,25 +3750,10 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         :param y: 屏幕纵坐标
         """
         self._menu_open = True
-        want_top = bool(self.topmost)
-        try:
-            if want_top:
-                self.root.attributes("-topmost", False)
-                if self.skin_win is not None:
-                    self.skin_win.attributes("-topmost", False)
-        except Exception:
-            pass
         try:
             menu.tk_popup(x, y)
         finally:
             self._menu_open = False
-            try:
-                if want_top:
-                    self.root.attributes("-topmost", True)
-                    if self.skin_win is not None:
-                        self.skin_win.attributes("-topmost", True)
-            except Exception:
-                pass
             self.root.after_idle(self.restack_skin)
             # 恢复 -topmost 时皮肤窗口可能被抬到主窗口上面, 底图就把顶栏/
             # 底栏的文字盖住了(看着像文字变透明), 过一会儿再摆一次
