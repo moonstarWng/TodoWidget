@@ -4006,11 +4006,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.hide_main_shadow()
         self.apply_resize_state()
         # 栏上的文字就用用户配的文字色, 不再自动改色(自动改色踩过好几次坑)
-        try:
-            from . import titletrace
-            titletrace.start(self)
-        except Exception:
-            pass
         if skin is not None:
             self.make_skin()
         else:

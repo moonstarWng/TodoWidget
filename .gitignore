@@ -30,3 +30,6 @@ f*.png
 frame_*.png
 preview*.png
 *.tmp
+
+# 更新改走 release 附件，不再把 exe 放进仓库
+待办清单.exe

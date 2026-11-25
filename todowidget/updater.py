@@ -2,6 +2,7 @@
 """检查更新: 从 GitHub 取最新打包好的 exe, 换掉自己再重启"""
 
 import hashlib
+import json
 import os
 import re
 import socket
@@ -15,10 +16,9 @@ import urllib.request
 from .version import APP_VERSION
 
 GITHUB_REPO = "moonstarWng/TodoWidget"
-BRANCH = "main"
 EXE_NAME = "待办清单.exe"
-VERSION_NAME = "version.txt"
-RAW_URL = "https://raw.githubusercontent.com/{}/{}/".format(GITHUB_REPO, BRANCH)
+RELEASES_API = "https://api.github.com/repos/{}/releases/latest".format(
+    GITHUB_REPO)
 HEADERS = {"User-Agent": "TodoWidget-updater"}
 
 
@@ -71,23 +71,27 @@ def describe_error(exc):
     return "网络错误"
 
 
-def fetch_latest(timeout=12):
-    """取远端版本文件里的版本号"""
-    url = RAW_URL + urllib.parse.quote(VERSION_NAME)
-    request = urllib.request.Request(url, headers=HEADERS)
+def _latest_release(timeout):
+    """取最新的 GitHub Release 信息(dict)"""
+    request = urllib.request.Request(RELEASES_API, headers=HEADERS)
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", "replace")
+            return json.loads(resp.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         if exc.code == 404:
-            raise RuntimeError("服务器上还没有版本文件")
+            raise RuntimeError("还没有发布过新版本")
         raise RuntimeError(describe_error(exc))
     except Exception as exc:
         raise RuntimeError(describe_error(exc))
-    text = raw.strip()
-    if not text:
-        raise RuntimeError("版本文件是空的")
-    return text.splitlines()[0].strip()
+
+
+def fetch_latest(timeout=12):
+    """取最新 release 的版本号(用 tag 表示)"""
+    data = _latest_release(timeout)
+    tag = str(data.get("tag_name") or "").strip().lstrip("vV")
+    if not tag:
+        raise RuntimeError("发布里没有版本号")
+    return tag
 
 
 def is_newer(latest_version):
@@ -115,8 +119,17 @@ def download(progress=None, timeout=90):
     target = exe_path()
     if target is None:
         raise RuntimeError("现在是源码运行，请手动更新")
-    url = RAW_URL + urllib.parse.quote(EXE_NAME)
-    request = urllib.request.Request(url, headers=HEADERS)
+    data = _latest_release(timeout)
+    url = None
+    for asset in data.get("assets") or []:
+        if (asset.get("name") or "").lower() == EXE_NAME.lower():
+            url = asset.get("browser_download_url")
+            break
+    if not url:
+        raise RuntimeError("发布里没有找到程序文件")
+    headers = dict(HEADERS)
+    headers["Accept"] = "application/octet-stream"
+    request = urllib.request.Request(url, headers=headers)
     dest = target + ".new"
     try:
         with urllib.request.urlopen(request, timeout=timeout) as resp:
