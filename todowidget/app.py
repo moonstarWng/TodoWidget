@@ -3749,7 +3749,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             # 恢复 -topmost 时皮肤窗口可能被抬到主窗口上面, 底图就把顶栏/
             # 底栏的文字盖住了(看着像文字变透明), 过一会儿再摆一次
             self.root.after(150, self.restore_after_menu)
-            self.root.after(500, self.restore_after_menu)
             self.list_paint_later()
 
     def restore_after_menu(self):
@@ -3762,7 +3761,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             self.place_skin_below()
         except Exception:
             pass
-        self.sync_skin()
 
     def popup_header(self, e):
         m = tk.Menu(self.root, tearoff=0)
