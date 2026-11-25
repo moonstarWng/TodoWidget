@@ -877,9 +877,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.lbl_title.config(text=text, fg=self.title_fg())
 
     def title_fg(self):
-        """标题该用的文字色: 顶栏单独上色时跟栏的颜色走"""
-        colors = self.bar_fg_colors()
-        return colors["fg"] if colors is not None else P.fg
+        """标题该用的文字色: 就是用户配的文字色"""
+        return P.fg
 
     def stop_title_fade(self):
         """停掉还没跑完的标题淡化, 颜色恢复成正常"""
@@ -901,9 +900,9 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         text, cursor = self.title_text()
         self.lbl_title.config(cursor=cursor)
         self.stop_title_fade()
-        if self.bar_fg_colors() is not None:
-            # 栏单独上色时不做淡化: 淡化的中间帧颜色接近底色, 看着字会突然
-            # 没了(透明留白), 直接换成栏上的文字色
+        if self.bars_split:
+            # 栏单独上色时顶栏是透明的, 往色键上淡会让标题一闪(invisible),
+            # 所以不做淡化, 直接换字
             self.lbl_title.config(text=text, fg=self.title_fg())
             return
         # 皮肤模式下顶栏是透明的, 往透明色上淡才自然
@@ -3950,11 +3949,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         # 阴影最后一个出现: 先挂起, 等皮肤/内容都摆好了再显示
         self.hide_main_shadow()
         self.apply_resize_state()
-        # 栏单独上色时, 顶栏/底栏的文字要换成跟栏相配的颜色
-        self.retint_bars()
-        self.watch_bar_tint()
-        # 标题有淡入动画, 动画写完会重设文字色, 收尾再补一次
-        self.root.after(200, self.retint_bars)
+        # 栏上的文字就用用户配的文字色, 不再自动改色(自动改色踩过好几次坑)
         if skin is not None:
             self.make_skin()
         else:
