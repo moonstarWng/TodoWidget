@@ -2860,10 +2860,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                  str(P.fg_faint).lower(): colors["faint"],
                  "#ffffff": colors["fg"]}
 
-        bar_bgs = {str(P.head).lower(), str(P.bg).lower(),
-                   str(P.bg_alt).lower()}
-        hover_bg = str(P.bg_alt).lower()
-
         def walk(widget, top, depth=0):
             if depth > 3:
                 return
@@ -2876,33 +2872,6 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
                     widget.configure(fg=table[current])
                 except Exception:
                     pass
-            if depth:
-                # 文字底下垫一块"这一格里的栏色": 文字压在色键上会被 ClearType
-                # 混成透明, 看着有锯齿/空心; 垫上不透明底色就没有了
-                try:
-                    box = str(widget.cget("bg")).lower()
-                except Exception:
-                    box = ""
-                if box in bar_bgs:
-                    try:
-                        cy = widget.winfo_y() + widget.winfo_height() // 2
-                        cx = widget.winfo_x() + widget.winfo_width() // 2
-                        bh = max(1, top.winfo_height())
-                        bw = max(1, top.winfo_width())
-                    except Exception:
-                        cy, cx, bh, bw = 0, 0, 1, 1
-                    back = self.bar_color_at(cx, cy, bw, bh)
-                    if box == hover_bg:
-                        back = mix_color(back, colors["fg"], 0.12)
-                    if abs(brightness(back) - brightness(colors["fg"])) < 50:
-                        # 垫的底色跟字太像会把字吃掉, 往反方向拉开一点
-                        ink = ("#000000" if brightness(colors["fg"]) > 128
-                               else "#ffffff")
-                        back = mix_color(back, ink, 0.45)
-                    try:
-                        widget.configure(bg=back)
-                    except Exception:
-                        pass
             for child in widget.winfo_children():
                 walk(child, top, depth + 1)
 
