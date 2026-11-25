@@ -3421,14 +3421,15 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             # 拖动: 只把两个窗口一起挪过去。置顶、裁图、重推分层表面全都别做,
             # 位置变了不需要重绘内容, 做了反而整窗一黑一白地闪
             try:
-                w = int(width or root.winfo_width())
-                h = int(height or root.winfo_height())
+                r = self.root
+                w = int(width or r.winfo_width())
+                h = int(height or r.winfo_height())
                 if self.collapsed and self._folded_size:
                     w, h = self._folded_size
                 if x is None:
-                    x = root.winfo_rootx()
+                    x = r.winfo_rootx()
                 if y is None:
-                    y = root.winfo_rooty()
+                    y = r.winfo_rooty()
                 self.apply_window_rect(max(2, w), max(2, h), int(x), int(y))
             except Exception:
                 pass
