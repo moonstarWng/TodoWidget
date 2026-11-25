@@ -556,6 +556,13 @@ def run_selftest():
     root.geometry("330x460")
     settle(10)
 
+    # 收起后的高度可设置
+    saved_foldh = app.fold_bar_height()
+    app.choose_folded_height(34)
+    changed_foldh = app.fold_bar_height() == 34
+    app.choose_folded_height(saved_foldh)
+    check("收起后的高度可设置", changed_foldh)
+
     # 顶栏/底栏合并成一份设置: 三个颜色键要一致, 渐变时必须走皮肤底图
     extras_now = app.theme_extras()
     same_color = (extras_now["header_color"] == extras_now["footer_color"]

@@ -2144,6 +2144,12 @@ class SettingsMixin:
                            lambda: self.choose_resize_lock(True),
                            group="size", value=True)
 
+        holder = self.settings_block(panel, "收起后的高度", "折叠成横条时的高度")
+        for value, label in ((34, "小"), (42, "标准"), (52, "大")):
+            self.settings_chip(holder, label, self.fold_bar_height() == value,
+                               lambda v=value: self.choose_folded_height(v),
+                               group="foldh", value=value)
+
     def choose_topmost(self, value):
         """切换总在最前"""
         value = bool(value)

@@ -1536,7 +1536,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         else:
             self.update_title()
         # 动画期间窗口比较矮, 先放开正常的最小尺寸, 结束再恢复
-        folded_h = 42 + 2 * self._frame_pad
+        folded_h = self.fold_bar_height() + 2 * self._frame_pad
         self.root.minsize(140, folded_h)
         start_w = max(1, self.root.winfo_width())
         start_h = max(1, self.root.winfo_height())
@@ -1793,7 +1793,8 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.stat_box.pack_forget()
         if width and height:
             self.root.geometry("{}x{}".format(width, height))
-        self.root.minsize(140, 42 + 2 * self._frame_pad)
+        self.root.minsize(140, self.fold_bar_height()
+                           + 2 * self._frame_pad)
         self.apply_resize_state()
         self.round_window(width, height)
         if width and height and not self._skin_layered:
@@ -2809,6 +2810,36 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             return 0
         return max(1, int(self.border_width))
 
+    def fold_bar_height(self):
+        """收起后横条的高度(不含边框留白)"""
+        try:
+            return max(28, min(80, int(self.conf.get("folded_height") or 42)))
+        except Exception:
+            return 42
+
+    def choose_folded_height(self, value):
+        """设置收起后横条的高度(34 小 / 42 标准 / 52 大)"""
+        value = max(28, min(80, int(value)))
+        if value == self.fold_bar_height():
+            return
+        self.conf["folded_height"] = value
+        try:
+            self.save_conf()
+        except Exception:
+            pass
+        if self.collapsed:
+            pad = self._frame_pad
+            self._folded_size = (self.folded_width(), value + 2 * pad)
+            try:
+                self.root.minsize(140, value + 2 * pad)
+                self.root.geometry("{}x{}".format(*self._folded_size))
+            except Exception:
+                pass
+        try:
+            self.restyle_group("foldh", value)
+        except Exception:
+            pass
+
     def corner_radius(self):
         """窗口圆角半径
 
@@ -2948,7 +2979,7 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self._skin_region_size = None
         if self.collapsed:
             # 收起横条宽度是按顶栏内容算的, 留白变了要重新量一次
-            folded_h = 42 + 2 * pad
+            folded_h = self.fold_bar_height() + 2 * pad
             try:
                 self._folded_size = (self.folded_width(), folded_h)
                 self.root.minsize(140, folded_h)
