@@ -3417,6 +3417,22 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         if self._animating:
             # 折叠/展开动画每帧自己裁区域, 别让窗口事件用整窗大小盖回去(会闪出一帧大窗口)
             return
+        if instant:
+            # 拖动: 只把两个窗口一起挪过去。置顶、裁图、重推分层表面全都别做,
+            # 位置变了不需要重绘内容, 做了反而整窗一黑一白地闪
+            try:
+                w = int(width or root.winfo_width())
+                h = int(height or root.winfo_height())
+                if self.collapsed and self._folded_size:
+                    w, h = self._folded_size
+                if x is None:
+                    x = root.winfo_rootx()
+                if y is None:
+                    y = root.winfo_rooty()
+                self.apply_window_rect(max(2, w), max(2, h), int(x), int(y))
+            except Exception:
+                pass
+            return
         root = self.root
         try:
             if root.state() in ("withdrawn", "iconic"):
