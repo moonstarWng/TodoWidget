@@ -3746,7 +3746,23 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
             except Exception:
                 pass
             self.root.after_idle(self.restack_skin)
+            # 恢复 -topmost 时皮肤窗口可能被抬到主窗口上面, 底图就把顶栏/
+            # 底栏的文字盖住了(看着像文字变透明), 过一会儿再摆一次
+            self.root.after(150, self.restore_after_menu)
+            self.root.after(500, self.restore_after_menu)
             self.list_paint_later()
+
+    def restore_after_menu(self):
+        """菜单关掉后把层级摆回去: 主窗口在上, 皮肤窗口在下"""
+        try:
+            self.root.lift()
+        except Exception:
+            pass
+        try:
+            self.place_skin_below()
+        except Exception:
+            pass
+        self.sync_skin()
 
     def popup_header(self, e):
         m = tk.Menu(self.root, tearoff=0)
@@ -3950,6 +3966,11 @@ class TodoApp(ListViewMixin, ListMenuMixin, NoteMixin, SettingsMixin,
         self.hide_main_shadow()
         self.apply_resize_state()
         # 栏上的文字就用用户配的文字色, 不再自动改色(自动改色踩过好几次坑)
+        try:
+            from . import titletrace
+            titletrace.start(self)
+        except Exception:
+            pass
         if skin is not None:
             self.make_skin()
         else:
